@@ -13,7 +13,7 @@ use web_sys::{CloseEvent, ErrorEvent, MessageEvent, WebSocket};
 // Глобальное состояние WebSocket.
 // В WASM всё однопоточное — RefCell достаточно.
 thread_local! {
-    static WS: RefCell<Option<WebSocket>> = RefCell::new(None);
+    static WS: RefCell<Option<WebSocket>> = const { RefCell::new(None) };
 }
 
 // ── Хелперы DOM ──────────────────────────────────────────────────────────────
@@ -62,10 +62,6 @@ fn set_status(icon: &str, text: &str, class: &str) {
 
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
-    // Паникуем красиво прямо в консоль браузера
-    #[cfg(feature = "console_error_panic_hook")]
-    console_error_panic_hook::set_once();
-
     connect("ws://127.0.0.1:3000/ws")
 }
 
