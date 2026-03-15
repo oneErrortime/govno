@@ -1,4 +1,4 @@
-name: "💩 CI"
+name: "💩 CI + GitHub Pages"
 
 on:
   push:
@@ -10,65 +10,66 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+permissions:
+  contents: write   # нужно для gh-pages push
+
 jobs:
-  # ─── Говно-сервер ────────────────────────────────────────────────────────
+  # ─── Говно-сервер ──────────────────────────────────────────────────────────
   server:
-    name: "🦀 Server build & check"
+    name: "🦀 Server"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable
+      - name: Rust stable + clippy
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
 
-      - name: Cache cargo
+      - name: Cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-server-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-server-
+          key: ${{ runner.os }}-server-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build server
+      - name: Build
         run: cargo build -p govno-server --release
 
-      - name: Clippy server
+      - name: Clippy
         run: cargo clippy -p govno-server -- -D warnings
 
-  # ─── WASM-клиент ─────────────────────────────────────────────────────────
-  client-wasm:
-    name: "🕸️ WASM client build"
+  # ─── WASM-клиент + деплой на GitHub Pages ──────────────────────────────────
+  client-and-pages:
+    name: "🕸️ WASM + GitHub Pages"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable + wasm32 target
+      - name: Rust stable + wasm32 target + clippy
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
           components: clippy
 
-      - name: Cache cargo
+      - name: Cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-wasm-
+          key: ${{ runner.os }}-wasm-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-      - name: Build WASM client
+      - name: Build WASM (release)
         run: wasm-pack build client --target web --out-dir ../www/pkg --release
 
-      - name: Clippy WASM client
+      - name: Clippy WASM
         run: cargo clippy -p govno-client --target wasm32-unknown-unknown -- -D warnings
 
       - name: Upload WASM artifact
@@ -76,3 +77,12 @@ jobs:
         with:
           name: govno-client-wasm
           path: www/pkg/
+
+      # Деплоим www/ (index.html + pkg/*.wasm + pkg/*.js) на gh-pages
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./www
+          commit_message: "💩 deploy: ${{ github.sha }}"

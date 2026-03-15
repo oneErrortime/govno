@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
-// ║   💩  ГОВНО-КЛИЕНТ  v0.2.0  —  100% Rust → WASM                    ║
-// ║   Pub/Sub по топикам, JSON протокол, ни строчки JS бизнес-логики     ║
+// ║   💩  ГОВНО-КЛИЕНТ  v0.3.0  —  100% Rust → WASM                    ║
+// ║   Auth flow, pub/sub, serde_json протокол, ноль JS бизнес-логики    ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 use std::cell::RefCell;
@@ -11,11 +11,12 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CloseEvent, ErrorEvent, MessageEvent, WebSocket};
 
-// ── Протокол (зеркало серверных типов) ───────────────────────────────────────
+// ── Протокол ──────────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 enum ClientCmd<'a> {
+    Auth        { token: &'a str },
     Subscribe   { topic: &'a str },
     Unsubscribe,
     Echo        { text: &'a str },
@@ -25,14 +26,16 @@ enum ClientCmd<'a> {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerMsg {
-    Welcome     { msg: String },
-    Subscribed  { topic: String },
+    AuthRequired { msg: String },
+    Authorized   { puk: String, session_id: String },
+    Unauthorized { msg: String },
+    Welcome      { msg: String },
+    Subscribed   { topic: String },
     Unsubscribed,
-    // ShitMessage инлайнится в тег
-    Shit        { topic: String, seq: u64, payload: String },
-    Echo        { payload: String },
+    Shit         { topic: String, seq: u64, payload: String, priority: String },
+    Echo         { payload: String },
     Pong,
-    Error       { msg: String },
+    Error        { msg: String },
 }
 
 // ── Глобальное состояние ──────────────────────────────────────────────────────
@@ -41,30 +44,25 @@ thread_local! {
     static WS: RefCell<Option<WebSocket>> = const { RefCell::new(None) };
 }
 
-// ── Хелперы DOM ───────────────────────────────────────────────────────────────
+// ── DOM хелперы ───────────────────────────────────────────────────────────────
 
 fn document() -> web_sys::Document {
     web_sys::window().unwrap().document().unwrap()
 }
 
-fn now_str() -> String {
+fn now_hms() -> String {
     let d = Date::new_0();
-    format!(
-        "{:02}:{:02}:{:02}",
-        d.get_hours(),
-        d.get_minutes(),
-        d.get_seconds()
-    )
+    format!("{:02}:{:02}:{:02}", d.get_hours(), d.get_minutes(), d.get_seconds())
 }
 
 fn log(text: &str, class: &str) {
     let doc = document();
-    let Some(log_el) = doc.get_element_by_id("log") else { return };
+    let Some(el) = doc.get_element_by_id("log") else { return };
     let p = doc.create_element("p").unwrap();
     p.set_class_name(class);
-    p.set_text_content(Some(&format!("[{}] {}", now_str(), text)));
-    log_el.append_child(&p).unwrap();
-    log_el.set_scroll_top(log_el.scroll_height());
+    p.set_text_content(Some(&format!("[{}] {}", now_hms(), text)));
+    el.append_child(&p).unwrap();
+    el.set_scroll_top(el.scroll_height());
 }
 
 fn set_status(icon: &str, text: &str, class: &str) {
@@ -76,28 +74,63 @@ fn set_status(icon: &str, text: &str, class: &str) {
 
 fn set_sub_label(topic: Option<&str>) {
     if let Some(el) = document().get_element_by_id("sub-label") {
-        match topic {
-            Some(t) => el.set_text_content(Some(&format!("подписан: {t}"))),
-            None    => el.set_text_content(Some("не подписан")),
-        }
+        el.set_text_content(Some(match topic {
+            Some(t) => &format!("подписан: {t}"),
+            None    => "не подписан",
+        }));
     }
 }
 
-fn set_btn_enabled(id: &str, enabled: bool) {
+fn set_btn(id: &str, enabled: bool) {
     let doc = document();
     if let Some(btn) = doc.get_element_by_id(id) {
-        if enabled {
-            btn.remove_attribute("disabled").unwrap();
-        } else {
-            btn.set_attribute("disabled", "").unwrap();
-        }
+        if enabled { btn.remove_attribute("disabled").unwrap(); }
+        else       { btn.set_attribute("disabled", "").unwrap(); }
     }
 }
 
-// ── Обработка входящих сообщений ──────────────────────────────────────────────
+fn show_el(id: &str, visible: bool) {
+    let doc = document();
+    if let Some(el) = doc.get_element_by_id(id) {
+        let _ = el.set_attribute("style", if visible { "" } else { "display:none" });
+    }
+}
+
+fn set_text(id: &str, text: &str) {
+    if let Some(el) = document().get_element_by_id(id) {
+        el.set_text_content(Some(text));
+    }
+}
+
+fn enable_main_ui(session_id: &str) {
+    show_el("auth-overlay", false);
+    show_el("main-ui", true);
+    set_text("session-id", session_id);
+    set_btn("btn-send",   true);
+    set_btn("btn-liquid", true);
+    set_btn("btn-solid",  true);
+    set_btn("btn-gas",    true);
+    set_btn("btn-critical", true);
+    set_btn("btn-unsub",  true);
+}
+
+// ── Входящие сообщения ────────────────────────────────────────────────────────
 
 fn handle_server_msg(text: &str) {
     match serde_json::from_str::<ServerMsg>(text) {
+        Ok(ServerMsg::AuthRequired { msg }) => {
+            log(&msg, "msg-system");
+        }
+        Ok(ServerMsg::Authorized { puk, session_id }) => {
+            log(&puk, "msg-puk");
+            set_status("🟢", "авторизован", "status-ok");
+            enable_main_ui(&session_id);
+        }
+        Ok(ServerMsg::Unauthorized { msg }) => {
+            log(&msg, "msg-error");
+            set_status("🔴", "отказано", "status-error");
+            set_btn("btn-auth", true);
+        }
         Ok(ServerMsg::Welcome { msg }) => {
             log(&msg, "msg-system");
         }
@@ -106,39 +139,36 @@ fn handle_server_msg(text: &str) {
             set_sub_label(Some(&topic));
         }
         Ok(ServerMsg::Unsubscribed) => {
-            log("📭 Отписались от топика", "msg-system");
+            log("📭 Отписались", "msg-system");
             set_sub_label(None);
         }
-        Ok(ServerMsg::Shit { topic, seq, payload }) => {
-            let class = match topic.as_str() {
-                "жидкое"       => "msg-liquid",
-                "твёрдое"      => "msg-solid",
-                "газообразное" => "msg-gas",
-                _              => "msg-server",
+        Ok(ServerMsg::Shit { topic, seq, payload, priority }) => {
+            let class = if priority == "critical" {
+                "msg-critical"
+            } else {
+                match topic.as_str() {
+                    "жидкое"       => "msg-liquid",
+                    "твёрдое"      => "msg-solid",
+                    "газообразное" => "msg-gas",
+                    _              => "msg-server",
+                }
             };
             log(&format!("[#{seq}] {payload}"), class);
         }
-        Ok(ServerMsg::Echo { payload }) => {
-            log(&payload, "msg-echo");
-        }
-        Ok(ServerMsg::Pong) => {
-            log("🏓 pong", "msg-system");
-        }
-        Ok(ServerMsg::Error { msg }) => {
-            log(&format!("❌ Ошибка сервера: {msg}"), "msg-error");
-        }
+        Ok(ServerMsg::Echo { payload })   => log(&payload,          "msg-echo"),
+        Ok(ServerMsg::Pong)               => log("🏓 pong",         "msg-system"),
+        Ok(ServerMsg::Error { msg })      => log(&format!("❌ {msg}"), "msg-error"),
         Err(e) => {
             log(&format!("⚠️ Неизвестное сообщение: {e}"), "msg-error");
-            web_sys::console::warn_1(&format!("raw: {text}").into());
         }
     }
 }
 
-// ── Публичный API (экспортируется в JS) ───────────────────────────────────────
+// ── Публичный API ─────────────────────────────────────────────────────────────
 
 #[wasm_bindgen(start)]
-pub fn start() -> Result<(), JsValue> {
-    connect("ws://127.0.0.1:3000/ws")
+pub fn start() {
+    // Не подключаемся автоматически — URL задаётся из index.html
 }
 
 #[wasm_bindgen]
@@ -148,23 +178,15 @@ pub fn connect(url: &str) -> Result<(), JsValue> {
     let ws = WebSocket::new(url)?;
     set_status("⏳", "подключаемся...", "status-connecting");
 
-    // onopen
     {
         let cb = Closure::wrap(Box::new(move |_: JsValue| {
-            set_status("🟢", "подключено", "status-ok");
-            log("✅ Соединение установлено", "msg-system");
-            set_btn_enabled("btn-send", true);
-            // Топик-кнопки
-            set_btn_enabled("btn-liquid", true);
-            set_btn_enabled("btn-solid",  true);
-            set_btn_enabled("btn-gas",    true);
-            set_btn_enabled("btn-unsub",  true);
+            set_status("⏳", "ожидаем токен...", "status-connecting");
+            log("🔗 Соединение установлено, ожидаем auth challenge...", "msg-system");
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onopen(Some(cb.as_ref().unchecked_ref()));
         cb.forget();
     }
 
-    // onmessage
     {
         let cb = Closure::wrap(Box::new(move |e: MessageEvent| {
             if let Some(text) = e.data().as_string() {
@@ -175,7 +197,6 @@ pub fn connect(url: &str) -> Result<(), JsValue> {
         cb.forget();
     }
 
-    // onerror
     {
         let cb = Closure::wrap(Box::new(move |e: ErrorEvent| {
             set_status("🔴", "ошибка", "status-error");
@@ -185,16 +206,15 @@ pub fn connect(url: &str) -> Result<(), JsValue> {
         cb.forget();
     }
 
-    // onclose
     {
         let cb = Closure::wrap(Box::new(move |e: CloseEvent| {
             set_status("🔴", "отключено", "status-error");
             log(&format!("🚪 Отключено (code={})", e.code()), "msg-system");
-            set_btn_enabled("btn-send",   false);
-            set_btn_enabled("btn-liquid", false);
-            set_btn_enabled("btn-solid",  false);
-            set_btn_enabled("btn-gas",    false);
-            set_btn_enabled("btn-unsub",  false);
+            show_el("auth-overlay", true);
+            show_el("main-ui", false);
+            for id in &["btn-send","btn-liquid","btn-solid","btn-gas","btn-critical","btn-unsub"] {
+                set_btn(id, false);
+            }
             set_sub_label(None);
         }) as Box<dyn FnMut(CloseEvent)>);
         ws.set_onclose(Some(cb.as_ref().unchecked_ref()));
@@ -206,12 +226,18 @@ pub fn connect(url: &str) -> Result<(), JsValue> {
 }
 
 fn ws_send_json(cmd: &ClientCmd) {
-    let json = serde_json::to_string(cmd).unwrap_or_default();
-    WS.with(|cell| {
-        if let Some(ws) = cell.borrow().as_ref() {
-            let _ = ws.send_with_str(&json);
-        }
-    });
+    if let Ok(json) = serde_json::to_string(cmd) {
+        WS.with(|cell| {
+            if let Some(ws) = cell.borrow().as_ref() {
+                let _ = ws.send_with_str(&json);
+            }
+        });
+    }
+}
+
+#[wasm_bindgen]
+pub fn auth(token: &str) {
+    ws_send_json(&ClientCmd::Auth { token });
 }
 
 #[wasm_bindgen]
@@ -222,7 +248,6 @@ pub fn subscribe(topic: &str) {
 
 #[wasm_bindgen]
 pub fn unsubscribe() {
-    log("➡️  отписываемся...", "msg-system");
     ws_send_json(&ClientCmd::Unsubscribe);
 }
 
@@ -241,9 +266,7 @@ pub fn ping() {
 #[wasm_bindgen]
 pub fn disconnect() -> Result<(), JsValue> {
     WS.with(|cell| -> Result<(), JsValue> {
-        if let Some(ws) = cell.borrow().as_ref() {
-            ws.close()?;
-        }
+        if let Some(ws) = cell.borrow().as_ref() { ws.close()?; }
         Ok(())
     })
 }

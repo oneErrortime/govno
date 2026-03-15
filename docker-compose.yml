@@ -1,0 +1,71 @@
+# 💩 ГОВНО-СТЕК
+#
+# Запуск полного стека:
+#   docker compose up
+#
+# Сначала собрать WASM (один раз или после изменений клиента):
+#   docker compose run --rm wasm-builder
+#
+# Переменные:
+#   GOVNO_TOKEN — токен авторизации (default: говно)
+#   SERVER_PORT — порт сервера (default: 3000)
+#   CLIENT_PORT — порт статики (default: 8080)
+
+services:
+
+  # ── Говно-сервер ──────────────────────────────────────────────────────────
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: govno-server:latest
+    container_name: govno-server
+    ports:
+      - "${SERVER_PORT:-3000}:3000"
+    environment:
+      GOVNO_TOKEN: "${GOVNO_TOKEN:-говно}"
+      RUST_LOG: govno_server=info
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # ── Статика (nginx отдаёт www/ с WASM-клиентом) ──────────────────────────
+  client:
+    image: nginx:alpine
+    container_name: govno-client
+    ports:
+      - "${CLIENT_PORT:-8080}:80"
+    volumes:
+      - ./www:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── WASM Builder (запускается вручную: docker compose run --rm wasm-builder) ──
+  wasm-builder:
+    image: rust:1.77-slim
+    container_name: govno-wasm-builder
+    working_dir: /app
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/app/target
+    command: >
+      bash -c "
+        apt-get update -q && apt-get install -y -q curl &&
+        curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh &&
+        wasm-pack build client --target web --out-dir ../www/pkg --release
+      "
+    profiles:
+      - build
+
+volumes:
+  cargo-cache:
+  target-cache:
