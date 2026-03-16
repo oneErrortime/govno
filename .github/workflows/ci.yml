@@ -474,6 +474,12 @@ jobs:
   wasm-and-pages:
     name: "🕸️ WASM + GitHub Pages"
     runs-on: ubuntu-latest
+    # Required by actions/deploy-pages: job must declare
+    # environment: github-pages for the Pages deployment API
+    environment:
+      name: github-pages
+      url: ${{ steps.pages-deploy.outputs.page_url }}
+
 
     steps:
       - name: "📥 Checkout"
