@@ -6,5 +6,5 @@ edition = "2021"
 name = "govno-worker-critical"
 path = "src/main.rs"
 [dependencies]
-workers_common = { path = "../common" }
+workers-common = { path = "../common" }
 proto          = { workspace = true }

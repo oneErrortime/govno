@@ -34,8 +34,3 @@ features = [
     # console
     "console",
 ]
-
-[profile.release]
-opt-level  = "s"
-lto        = true
-panic      = "abort"

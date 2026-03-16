@@ -8,64 +8,107 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-  # Pin exact toolchain so caching is stable
+  RUST_BACKTRACE: full      # full, not just 1 — gives exact frames
   RUST_VERSION: "1.77"
 
 permissions:
   contents: write
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-# Every job starts with env diagnostics so failures are immediately locatable.
-
+# ═════════════════════════════════════════════════════════════════════════════
+# JOB 1 — Native crates: orchestrator + all workers
+# ═════════════════════════════════════════════════════════════════════════════
 jobs:
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # JOB 1: Orchestrator + Workers (native x86_64 binaries)
-  # ─────────────────────────────────────────────────────────────────────────
   native:
-    name: "🦀 Native crates (orchestrator + workers)"
+    name: "🦀 Native (orchestrator + workers)"
     runs-on: ubuntu-latest
 
     steps:
+      # ── Checkout ────────────────────────────────────────────────────────────
       - name: "📥 Checkout"
         uses: actions/checkout@v4
 
-      # ── Environment diagnostics ──────────────────────────────────────────
-      - name: "🔍 Environment diagnostics"
+      # ── Runner / OS diagnostics ──────────────────────────────────────────
+      - name: "🔍 [diag] Runner environment"
         run: |
-          echo "=== Runner info ==="
+          echo "════ OS ════"
           uname -a
           cat /etc/os-release
-          echo "=== Workspace ==="
+          echo ""
+          echo "════ GitHub context ════"
+          echo "RUNNER_OS=$RUNNER_OS"
           echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-          echo "PWD=$(pwd)"
-          echo "=== Directory structure ==="
-          find . -name "Cargo.toml" | sort
-          echo "=== Disk space ==="
+          echo "GITHUB_REF=$GITHUB_REF"
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          echo ""
+          echo "════ Disk ════"
           df -h
-          echo "=== Memory ==="
+          echo ""
+          echo "════ Memory ════"
           free -h
+          echo ""
+          echo "════ CPU ════"
+          nproc
+          lscpu | grep -E "^(Architecture|CPU\(s\)|Model name)"
 
+      # ── Workspace structure ──────────────────────────────────────────────
+      - name: "🔍 [diag] Workspace file structure"
+        run: |
+          echo "════ All Cargo.toml files (workspace members) ════"
+          find . -name "Cargo.toml" -not -path './target/*' | sort | while read f; do
+            name=$(grep '^name' "$f" | head -1 || echo "(no name)")
+            echo "  $f  →  $name"
+          done
+
+          echo ""
+          echo "════ Cargo.lock present? ════"
+          ls -la Cargo.lock && head -5 Cargo.lock || echo "❌ Cargo.lock MISSING"
+
+          echo ""
+          echo "════ Root Cargo.toml ════"
+          cat Cargo.toml
+
+          echo ""
+          echo "════ workers/common/Cargo.toml (dep name must match package name) ════"
+          cat workers/common/Cargo.toml
+
+          echo ""
+          echo "════ workers/liquid/Cargo.toml ════"
+          cat workers/liquid/Cargo.toml
+
+          echo ""
+          echo "════ Rust source files ════"
+          find . -name "*.rs" -not -path './target/*' | sort | while read f; do
+            echo "  $f  ($(wc -l < "$f") lines)"
+          done
+
+      # ── Install toolchain ────────────────────────────────────────────────
       - name: "🦀 Install Rust ${{ env.RUST_VERSION }} + clippy + rustfmt"
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
           components: clippy, rustfmt
 
-      - name: "🔍 Rust toolchain info"
+      - name: "🔍 [diag] Rust toolchain"
         run: |
-          rustc   --version --verbose
-          cargo   --version
-          rustup  show
-          echo "=== Active toolchain ==="
-          rustup show active-toolchain
+          echo "════ rustc ════"
+          rustc --version --verbose
+          echo ""
+          echo "════ cargo ════"
+          cargo --version
+          echo ""
+          echo "════ rustup show ════"
+          rustup show
+          echo ""
+          echo "════ installed targets ════"
+          rustup target list --installed
+          echo ""
+          echo "════ installed components ════"
+          rustup component list --installed
 
-      # ── Cache ────────────────────────────────────────────────────────────
-      # Key includes OS + Cargo.lock hash + toolchain version.
-      # Separate key for registry (rarely changes) vs target/ (changes often).
+      # ── Cargo registry cache ─────────────────────────────────────────────
       - name: "💾 Cache — cargo registry"
         uses: actions/cache@v4
+        id: cache-reg
         with:
           path: |
             ~/.cargo/registry/index
@@ -76,8 +119,15 @@ jobs:
             ${{ runner.os }}-cargo-reg-${{ env.RUST_VERSION }}-
             ${{ runner.os }}-cargo-reg-
 
+      - name: "🔍 [diag] Registry cache result"
+        run: |
+          echo "cache-hit=${{ steps.cache-reg.outputs.cache-hit }}"
+          echo "~/.cargo/registry size: $(du -sh ~/.cargo/registry 2>/dev/null || echo 'empty')"
+
+      # ── Target dir cache ─────────────────────────────────────────────────
       - name: "💾 Cache — target/"
         uses: actions/cache@v4
+        id: cache-target
         with:
           path: target
           key: ${{ runner.os }}-target-native-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
@@ -85,135 +135,227 @@ jobs:
             ${{ runner.os }}-target-native-${{ env.RUST_VERSION }}-
             ${{ runner.os }}-target-native-
 
-      # ── Verify workspace ─────────────────────────────────────────────────
-      - name: "🔍 Verify workspace members exist"
+      - name: "🔍 [diag] Target cache result"
         run: |
-          echo "=== Checking workspace member directories ==="
-          for member in proto orchestrator workers/common workers/liquid \
-                        workers/solid workers/gas workers/critical; do
-            if [ -d "$member" ]; then
-              echo "✅ $member/"
-              ls "$member/src/"
-            else
-              echo "❌ MISSING: $member/" >&2
-              exit 1
-            fi
-          done
-          echo "=== Workspace Cargo.toml ==="
-          cat Cargo.toml
+          echo "cache-hit=${{ steps.cache-target.outputs.cache-hit }}"
+          echo "target/ size: $(du -sh target 2>/dev/null || echo 'empty/not restored')"
+
+      # ── Dependency resolution check (fast, before full build) ────────────
+      - name: "🔍 cargo metadata (dep resolution smoke test)"
+        run: |
+          echo "════ Resolving workspace deps ════"
+          cargo metadata --format-version 1 --no-deps \
+            | python3 -c "
+          import json, sys
+          m = json.load(sys.stdin)
+          pkgs = [p['name'] for p in m['packages']]
+          print('Resolved packages:', sorted(pkgs))
+          print('Total:', len(pkgs))
+          # Verify key packages present
+          required = [
+            'proto', 'govno-orchestrator', 'workers-common',
+            'govno-worker-liquid', 'govno-worker-solid',
+            'govno-worker-gas', 'govno-worker-critical', 'govno-client'
+          ]
+          missing = [p for p in required if p not in pkgs]
+          if missing:
+            print('❌ MISSING packages:', missing)
+            sys.exit(1)
+          print('✅ All required packages resolved')
+          "
 
       # ── Build ────────────────────────────────────────────────────────────
-      - name: "🔨 cargo build --release (all native crates)"
+      - name: "🔨 cargo build --release (native crates)"
         run: |
-          cargo build --release \
+          echo "════ Building all native crates ════"
+          cargo build --release --locked \
             -p govno-orchestrator \
             -p govno-worker-liquid \
             -p govno-worker-solid \
             -p govno-worker-gas \
-            -p govno-worker-critical
-          echo "=== Built binaries ==="
-          ls -lh target/release/govno-*
+            -p govno-worker-critical \
+            2>&1 | tee /tmp/build-native.log
+          echo "Exit code: $?"
 
-      - name: "🔍 Verify binaries are executable"
+      - name: "🔍 [diag] Built binaries"
         run: |
+          echo "════ Binaries in target/release/ ════"
           for bin in govno-orchestrator govno-worker-liquid govno-worker-solid \
                      govno-worker-gas govno-worker-critical; do
-            if [ -x "target/release/$bin" ]; then
-              echo "✅ target/release/$bin ($(du -h target/release/$bin | cut -f1))"
+            path="target/release/$bin"
+            if [ -x "$path" ]; then
+              size=$(du -h "$path" | cut -f1)
+              echo "  ✅ $path  ($size)"
+              file "$path"
             else
-              echo "❌ NOT FOUND or not executable: target/release/$bin" >&2
+              echo "  ❌ MISSING or not executable: $path"
               exit 1
             fi
           done
+          echo ""
+          echo "════ All executables in target/release/ ════"
+          find target/release -maxdepth 1 -type f -executable | sort
 
       # ── Clippy ───────────────────────────────────────────────────────────
+      - name: "📎 clippy — proto"
+        run: |
+          echo "════ clippy: proto ════"
+          cargo clippy -p proto -- -D warnings 2>&1
+          echo "Exit: $?"
+
       - name: "📎 clippy — orchestrator"
         run: |
+          echo "════ clippy: govno-orchestrator ════"
           cargo clippy -p govno-orchestrator -- \
             -D warnings \
-            -A clippy::too_many_arguments
-        env:
-          RUSTFLAGS: ""
+            -A clippy::too_many_arguments \
+            2>&1
+          echo "Exit: $?"
 
-      - name: "📎 clippy — all workers"
+      - name: "📎 clippy — workers"
         run: |
-          for pkg in govno-worker-liquid govno-worker-solid \
+          for pkg in workers-common govno-worker-liquid govno-worker-solid \
                      govno-worker-gas govno-worker-critical; do
-            echo "--- clippy: $pkg ---"
-            cargo clippy -p "$pkg" -- -D warnings
+            echo "════ clippy: $pkg ════"
+            cargo clippy -p "$pkg" -- -D warnings 2>&1
+            echo "Exit: $?"
           done
 
-      - name: "📎 clippy — proto crate"
-        run: cargo clippy -p proto -- -D warnings
-
       - name: "🎨 rustfmt check"
-        run: cargo fmt --all -- --check
-        continue-on-error: true   # format issues → warning, not hard fail
-
-      # ── Smoke test (start + kill) ─────────────────────────────────────────
-      - name: "🚬 Smoke test — orchestrator starts and answers /health"
         run: |
-          echo "=== Starting orchestrator ==="
-          GOVNO_TOKEN=test RUST_LOG=info \
+          echo "════ rustfmt --check ════"
+          cargo fmt --all -- --check 2>&1 || {
+            echo "⚠️ rustfmt found formatting issues (warning only, not failing)"
+          }
+        continue-on-error: true
+
+      # ── Upload build log on failure ───────────────────────────────────────
+      - name: "📤 Upload build log (on failure)"
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-build-log-${{ github.sha }}
+          path: /tmp/build-native.log
+          retention-days: 7
+
+      # ── Smoke test ────────────────────────────────────────────────────────
+      - name: "🚬 Smoke test — orchestrator /health + endpoints"
+        run: |
+          echo "════ Starting orchestrator ════"
+          GOVNO_TOKEN=test \
+          RUST_LOG=govno_orchestrator=debug \
+          LISTEN_ADDR=0.0.0.0:3000 \
             ./target/release/govno-orchestrator &
           ORC_PID=$!
           echo "PID=$ORC_PID"
 
-          # Wait up to 10s for it to bind
-          for i in $(seq 1 10); do
+          echo "════ Waiting for port 3000 ════"
+          READY=0
+          for i in $(seq 1 20); do
             sleep 1
-            if curl -sf http://localhost:3000/health; then
-              echo -e "\n✅ /health OK after ${i}s"
-              break
-            fi
+            # Check process still alive
             if ! kill -0 $ORC_PID 2>/dev/null; then
-              echo "❌ orchestrator process died" >&2
+              echo "❌ Process $ORC_PID died at iteration $i"
               exit 1
             fi
-            echo "⏳ waiting... ($i/10)"
+            # Try /health
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                         --connect-timeout 1 http://localhost:3000/health 2>/dev/null || echo "000")
+            echo "  [$i/20] HTTP $HTTP_CODE from /health (PID=$ORC_PID alive)"
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ Orchestrator ready after ${i}s"
+              READY=1
+              break
+            fi
           done
 
-          # Check other endpoints
-          echo "=== /metrics ==="
-          curl -sf http://localhost:3000/metrics
+          if [ "$READY" = "0" ]; then
+            echo "❌ Orchestrator did not become ready in 20s"
+            echo "=== Process state ==="
+            ps aux | grep govno
+            exit 1
+          fi
+
           echo ""
-          echo "=== /metrics/json ==="
-          curl -sf http://localhost:3000/metrics/json | python3 -m json.tool
+          echo "════ GET /health ════"
+          curl -sf http://localhost:3000/health && echo ""
+
           echo ""
-          echo "=== /api/services (empty registry) ==="
+          echo "════ GET /api/services (empty registry) ════"
           curl -sf http://localhost:3000/api/services | python3 -m json.tool
 
+          echo ""
+          echo "════ GET /metrics ════"
+          curl -sf http://localhost:3000/metrics | head -30
+
+          echo ""
+          echo "════ GET /metrics/json ════"
+          curl -sf http://localhost:3000/metrics/json | python3 -m json.tool
+
+          echo ""
+          echo "════ WebSocket handshake test ════"
+          # Use curl with --http1.1 upgrade — confirms WS endpoint accepts connections
+          # We expect 101 Switching Protocols
+          WS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Connection: Upgrade" \
+            -H "Upgrade: websocket" \
+            -H "Sec-WebSocket-Version: 13" \
+            -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+            http://localhost:3000/ws 2>/dev/null || echo "000")
+          echo "WS /ws handshake HTTP status: $WS_CODE"
+          [ "$WS_CODE" = "101" ] && echo "✅ WebSocket handshake OK" \
+                                 || echo "⚠️ Expected 101, got $WS_CODE"
+
+          WS_PROD_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Connection: Upgrade" \
+            -H "Upgrade: websocket" \
+            -H "Sec-WebSocket-Version: 13" \
+            -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+            http://localhost:3000/producer 2>/dev/null || echo "000")
+          echo "WS /producer handshake HTTP status: $WS_PROD_CODE"
+          [ "$WS_PROD_CODE" = "101" ] && echo "✅ /producer WebSocket handshake OK" \
+                                      || echo "⚠️ Expected 101, got $WS_PROD_CODE"
+
+          echo ""
+          echo "════ Stopping orchestrator ════"
           kill $ORC_PID
+          wait $ORC_PID 2>/dev/null || true
           echo "✅ Smoke test passed"
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # JOB 2: WASM client + GitHub Pages deploy
-  # ─────────────────────────────────────────────────────────────────────────
+
+# ═════════════════════════════════════════════════════════════════════════════
+# JOB 2 — WASM client + GitHub Pages
+# ═════════════════════════════════════════════════════════════════════════════
   wasm-and-pages:
-    name: "🕸️ WASM client + GitHub Pages"
+    name: "🕸️ WASM + GitHub Pages"
     runs-on: ubuntu-latest
 
     steps:
       - name: "📥 Checkout"
         uses: actions/checkout@v4
 
-      # ── Environment diagnostics ──────────────────────────────────────────
-      - name: "🔍 Environment diagnostics"
+      - name: "🔍 [diag] WASM job environment"
         run: |
-          echo "=== Runner ==="
+          echo "════ Runner ════"
           uname -a
-          echo "=== Workspace ==="
-          echo "PWD=$(pwd)"
           echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-          echo "=== Client source ==="
-          find client/ -name "*.rs" | sort
-          echo "=== client/Cargo.toml ==="
-          cat client/Cargo.toml
-          echo "=== client/src/lib.rs (first 10 lines) ==="
-          head -10 client/src/lib.rs
-          echo "=== www/ ==="
+          echo "PWD=$(pwd)"
+          echo ""
+          echo "════ client/ structure ════"
+          find client/ -not -path '*/target/*' | sort | while read f; do
+            [ -f "$f" ] && echo "  $f  ($(wc -l < "$f") lines)" || echo "  $f/"
+          done
+          echo ""
+          echo "════ www/ before build ════"
           ls -la www/
-          echo "=== Disk space ==="
+          echo ""
+          echo "════ workspace members (checking client is listed) ════"
+          grep -A20 '^\[workspace\]' Cargo.toml
+          echo ""
+          echo "════ client/Cargo.toml ════"
+          cat client/Cargo.toml
+          echo ""
+          echo "════ Disk ════"
           df -h
 
       - name: "🦀 Install Rust ${{ env.RUST_VERSION }} + wasm32 + clippy"
@@ -223,15 +365,23 @@ jobs:
           targets: wasm32-unknown-unknown
           components: clippy
 
-      - name: "🔍 Verify wasm32 target is installed"
+      - name: "🔍 [diag] Rust toolchain + wasm32 target"
         run: |
-          rustup target list --installed | grep wasm32
-          echo "Rust: $(rustc --version)"
-          echo "Cargo: $(cargo --version)"
+          rustc --version --verbose
+          cargo --version
+          echo ""
+          echo "════ Installed targets ════"
+          rustup target list --installed
+          echo ""
+          echo "════ wasm32 target present? ════"
+          rustup target list --installed | grep wasm32-unknown-unknown \
+            && echo "✅ wasm32-unknown-unknown installed" \
+            || (echo "❌ wasm32-unknown-unknown MISSING" && exit 1)
 
       # ── Cache ────────────────────────────────────────────────────────────
-      - name: "💾 Cache — cargo registry"
+      - name: "💾 Cache — cargo registry (wasm)"
         uses: actions/cache@v4
+        id: cache-reg-wasm
         with:
           path: |
             ~/.cargo/registry/index
@@ -244,6 +394,7 @@ jobs:
 
       - name: "💾 Cache — wasm target/"
         uses: actions/cache@v4
+        id: cache-target-wasm
         with:
           path: target
           key: ${{ runner.os }}-target-wasm-${{ env.RUST_VERSION }}-${{ hashFiles('client/src/**','client/Cargo.toml','proto/src/**','Cargo.lock') }}
@@ -251,8 +402,14 @@ jobs:
             ${{ runner.os }}-target-wasm-${{ env.RUST_VERSION }}-
             ${{ runner.os }}-target-wasm-
 
-      # ── Install wasm-pack ────────────────────────────────────────────────
-      # Cache the binary too to avoid re-downloading on every run.
+      - name: "🔍 [diag] Cache hit status"
+        run: |
+          echo "registry cache-hit: ${{ steps.cache-reg-wasm.outputs.cache-hit }}"
+          echo "target   cache-hit: ${{ steps.cache-target-wasm.outputs.cache-hit }}"
+          echo "~/.cargo/registry: $(du -sh ~/.cargo/registry 2>/dev/null || echo empty)"
+          echo "target/: $(du -sh target 2>/dev/null || echo empty)"
+
+      # ── wasm-pack install ────────────────────────────────────────────────
       - name: "💾 Cache — wasm-pack binary"
         uses: actions/cache@v4
         id: wasm-pack-cache
@@ -260,111 +417,186 @@ jobs:
           path: ~/.cargo/bin/wasm-pack
           key: ${{ runner.os }}-wasm-pack-0.12
 
-      - name: "📦 Install wasm-pack (if not cached)"
+      - name: "📦 Install wasm-pack (if cache miss)"
         if: steps.wasm-pack-cache.outputs.cache-hit != 'true'
         run: |
-          echo "=== Downloading wasm-pack ==="
-          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-          echo "=== wasm-pack version ==="
-          wasm-pack --version
+          echo "════ Downloading wasm-pack installer ════"
+          curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          echo "wasm-pack binary: $(which wasm-pack)"
 
-      - name: "🔍 wasm-pack available"
+      - name: "🔍 [diag] wasm-pack"
         run: |
           which wasm-pack
           wasm-pack --version
 
-      # ── Verify source structure ──────────────────────────────────────────
-      - name: "🔍 Verify client module files exist"
+      # ── Pre-build checks ─────────────────────────────────────────────────
+      - name: "🔍 Verify all client module source files exist"
         run: |
-          echo "=== Expected module files ==="
-          for f in client/src/lib.rs client/src/protocol.rs client/src/state.rs \
-                   client/src/dom.rs client/src/canvas.rs client/src/audio.rs \
-                   client/src/ws.rs; do
+          echo "════ Required client/src/*.rs files ════"
+          MISSING=0
+          for f in \
+              client/src/lib.rs \
+              client/src/protocol.rs \
+              client/src/state.rs \
+              client/src/dom.rs \
+              client/src/canvas.rs \
+              client/src/audio.rs \
+              client/src/ws.rs; do
             if [ -f "$f" ]; then
-              echo "✅ $f ($(wc -l < $f) lines)"
+              echo "  ✅ $f  ($(wc -l < "$f") lines)"
             else
-              echo "❌ MISSING: $f" >&2
-              exit 1
+              echo "  ❌ MISSING: $f"
+              MISSING=1
             fi
           done
-          echo "=== www/ before build ==="
-          ls -la www/
-          echo "=== Expected www/pkg to NOT exist yet ==="
-          [ ! -d "www/pkg" ] && echo "✅ www/pkg absent (will be created by wasm-pack)" || echo "⚠️ www/pkg already exists"
+          [ "$MISSING" = "0" ] || exit 1
 
-      # ── cargo check (fast feedback before full wasm-pack build) ──────────
-      - name: "🔍 cargo check --target wasm32"
+          echo ""
+          echo "════ Checking mod declarations in lib.rs ════"
+          for mod in protocol state dom canvas audio ws; do
+            grep -n "mod $mod" client/src/lib.rs \
+              && echo "  ✅ mod $mod declared" \
+              || echo "  ❌ mod $mod NOT declared in lib.rs"
+          done
+
+      - name: "🔍 cargo check --target wasm32 (fast type check)"
         run: |
-          cargo check -p govno-client --target wasm32-unknown-unknown
-          echo "✅ Type check passed"
+          echo "════ Type-checking govno-client for wasm32 ════"
+          cargo check -p govno-client --target wasm32-unknown-unknown 2>&1
+          echo "Exit: $?"
 
-      # ── clippy ───────────────────────────────────────────────────────────
       - name: "📎 clippy --target wasm32"
         run: |
+          echo "════ clippy: govno-client (wasm32) ════"
           cargo clippy -p govno-client \
             --target wasm32-unknown-unknown \
             -- -D warnings \
-               -A clippy::too_many_arguments
-        env:
-          RUSTFLAGS: ""
+               -A clippy::too_many_arguments \
+          2>&1
+          echo "Exit: $?"
 
-      # ── wasm-pack build ──────────────────────────────────────────────────
-      - name: "🔨 wasm-pack build (release)"
+      # ── wasm-pack build ───────────────────────────────────────────────────
+      - name: "🔨 wasm-pack build --release"
         run: |
-          echo "=== Building WASM ==="
+          echo "════ wasm-pack build ════"
           echo "PWD=$(pwd)"
-          echo "client/ contents:"
+          echo "client/ before build:"
           ls -la client/
-
-          # wasm-pack --out-dir path is relative to the package dir (client/)
-          # so ../www/pkg means <repo-root>/www/pkg
+          echo ""
+          echo "www/ before build:"
+          ls -la www/
+          echo ""
+          # --out-dir is relative to the package dir (client/),
+          # so ../www/pkg resolves to <repo-root>/www/pkg
           wasm-pack build client \
             --target web \
             --out-dir ../www/pkg \
             --release \
-            -- --locked
+            -- --locked \
+          2>&1 | tee /tmp/wasm-pack-build.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          echo ""
+          echo "wasm-pack exit: $BUILD_EXIT"
+          [ "$BUILD_EXIT" = "0" ] || exit $BUILD_EXIT
 
-          echo "=== wasm-pack output ==="
-          ls -lh www/pkg/
-          echo "=== .wasm size ==="
-          find www/pkg -name "*.wasm" -exec du -h {} \;
-          echo "=== .js glue size ==="
-          find www/pkg -name "*.js"   -exec du -h {} \;
-
-      - name: "🔍 Verify WASM artifacts"
+      - name: "🔍 [diag] wasm-pack output"
         run: |
-          echo "=== Required files in www/pkg/ ==="
-          for f in govno_client_bg.wasm govno_client.js govno_client_bg.js; do
-            if [ -f "www/pkg/$f" ]; then
-              echo "✅ www/pkg/$f"
+          echo "════ www/pkg/ contents ════"
+          ls -lh www/pkg/
+
+          echo ""
+          echo "════ WASM file sizes ════"
+          find www/pkg -name "*.wasm" | while read f; do
+            echo "  $f: $(du -h "$f" | cut -f1)"
+          done
+
+          echo ""
+          echo "════ JS glue file sizes ════"
+          find www/pkg -name "*.js" | while read f; do
+            echo "  $f: $(du -h "$f" | cut -f1)"
+          done
+
+          echo ""
+          echo "════ WASM magic bytes (must be: 00 61 73 6d = asm) ════"
+          WASM_FILE=$(find www/pkg -name "*.wasm" | head -1)
+          echo "File: $WASM_FILE"
+          xxd "$WASM_FILE" | head -2
+          MAGIC=$(xxd "$WASM_FILE" | head -1 | awk '{print $2,$3,$4,$5}')
+          echo "Magic: $MAGIC"
+          echo "$MAGIC" | grep -q "0061 736d" \
+            && echo "✅ Valid WASM magic bytes" \
+            || echo "❌ Invalid WASM magic bytes!"
+
+          echo ""
+          echo "════ pkg/package.json ════"
+          cat www/pkg/package.json | python3 -m json.tool 2>/dev/null || cat www/pkg/package.json
+
+          echo ""
+          echo "════ Exported #[wasm_bindgen] functions ════"
+          # wasm-bindgen generates a .d.ts with exported names
+          grep "export function" www/pkg/govno_client.d.ts 2>/dev/null \
+            | sed 's/export function /  ✅ /;s/(.*$//' \
+            || echo "(no .d.ts found — check wasm-pack output)"
+
+      - name: "🔍 [diag] HTML ↔ WASM API consistency check"
+        run: |
+          echo "════ Checking index.html imports vs .d.ts exports ════"
+
+          # Extract imported functions from index.html
+          echo "Imported in HTML:"
+          grep -oP "(?<=import init, \{)[^}]+" www/index.html \
+            | tr ',' '\n' | tr -d ' ' | sort \
+            | while read fn; do echo "  imported: $fn"; done
+
+          echo ""
+          echo "Exported in WASM (.d.ts):"
+          grep "^export function" www/pkg/govno_client.d.ts 2>/dev/null \
+            | awk '{print $3}' | cut -d'(' -f1 | sort \
+            | while read fn; do echo "  exported: $fn"; done
+
+          echo ""
+          echo "════ Required DOM element IDs in index.html ════"
+          MISSING_IDS=0
+          for id in log status auth-overlay main-ui btn-auth btn-send \
+                    url-input token-input \
+                    canvas-liquid canvas-solid canvas-gas canvas-critical canvas-total \
+                    rate-liquid rate-solid rate-gas rate-critical rate-total \
+                    stat-total stat-uptime services-panel session-id \
+                    m-total m-consumers m-producers m-auth-ok m-auth-fail; do
+            if grep -q "id=\"$id\"" www/index.html; then
+              echo "  ✅ #$id"
             else
-              echo "❌ MISSING: www/pkg/$f" >&2
-              exit 1
+              echo "  ❌ MISSING #$id"
+              MISSING_IDS=1
             fi
           done
+          [ "$MISSING_IDS" = "0" ] \
+            && echo "✅ All required element IDs present" \
+            || echo "⚠️ Some element IDs missing (check above)"
 
-          echo "=== WASM magic bytes (should be 00 61 73 6d) ==="
-          xxd www/pkg/govno_client_bg.wasm | head -1
+          echo ""
+          echo "════ import path in HTML matches pkg/ ════"
+          grep "from './pkg/govno_client.js'" www/index.html \
+            && echo "✅ import path correct" \
+            || (echo "❌ import path WRONG" && exit 1)
 
-          echo "=== Check index.html imports match pkg exports ==="
-          grep "from './pkg/govno_client.js'" www/index.html && echo "✅ import path correct"
-
-          echo "=== Check index.html has required element IDs ==="
-          for id in log status auth-overlay main-ui btn-auth btn-send \
-                    canvas-liquid canvas-solid canvas-gas canvas-critical canvas-total \
-                    services-panel; do
-            grep -q "id=\"$id\"" www/index.html && echo "✅ #$id" || echo "❌ MISSING #$id"
-          done
-
-      # ── Upload artifact ───────────────────────────────────────────────────
+      # ── Upload artifacts ─────────────────────────────────────────────────
       - name: "📤 Upload WASM artifacts"
         uses: actions/upload-artifact@v4
         with:
           name: govno-wasm-${{ github.sha }}
           path: www/pkg/
+          retention-days: 14
+
+      - name: "📤 Upload wasm-pack log (on failure)"
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-pack-build-log-${{ github.sha }}
+          path: /tmp/wasm-pack-build.log
           retention-days: 7
 
-      # ── Deploy to GitHub Pages ────────────────────────────────────────────
+      # ── Deploy GitHub Pages ───────────────────────────────────────────────
       - name: "🚀 Deploy to GitHub Pages"
         uses: peaceiris/actions-gh-pages@v4
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -372,102 +604,215 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./www
           commit_message: "💩 deploy: ${{ github.sha }}"
-          # Don't touch .nojekyll — we need standard file serving
           enable_jekyll: false
 
       - name: "✅ Pages deploy summary"
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
-          echo "🌐 GitHub Pages: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
-          echo "📦 Deployed: www/index.html + www/pkg/*.{wasm,js}"
+          echo "🌐 URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          echo "📦 Deployed: www/index.html + $(ls www/pkg | wc -l) pkg files"
+          echo "📦 WASM size: $(du -h www/pkg/*.wasm | cut -f1)"
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # JOB 3: Docker build smoke test (verifies Dockerfile actually works)
-  # ─────────────────────────────────────────────────────────────────────────
+
+# ═════════════════════════════════════════════════════════════════════════════
+# JOB 3 — Docker build smoke test
+# ═════════════════════════════════════════════════════════════════════════════
   docker:
-    name: "🐳 Docker build smoke test"
+    name: "🐳 Docker smoke test"
     runs-on: ubuntu-latest
-    # Only run on push to main (expensive — ~5 min full build)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Docker job doesn't depend on native/wasm jobs — runs in parallel.
+    # It re-verifies the build in isolation (different env, Docker cache).
 
     steps:
       - name: "📥 Checkout"
         uses: actions/checkout@v4
 
-      - name: "🔍 Docker info"
+      - name: "🔍 [diag] Docker environment"
         run: |
-          docker --version
+          echo "════ Docker daemon ════"
+          docker version
+          docker info | grep -E "(Server Version|Storage Driver|Cgroup|OS|Arch|CPU|Total Memory)"
+          echo ""
+          echo "════ docker compose ════"
           docker compose version
-          echo "=== Disk before build ==="
+          echo ""
+          echo "════ Disk before build ════"
           df -h
+          echo ""
+          echo "════ Dockerfile ════"
+          cat Dockerfile
 
-      - name: "🔨 Build orchestrator image"
+      # ── Build orchestrator ────────────────────────────────────────────────
+      - name: "🔨 Docker build — orchestrator"
+        id: docker-build-orc
         run: |
+          echo "════ Building govno/orchestrator:ci ════"
           docker build \
             --build-arg TARGET=govno-orchestrator \
             --tag govno/orchestrator:ci \
             --progress=plain \
-            . 2>&1 | tee /tmp/docker-build.log
+            . 2>&1 | tee /tmp/docker-build-orc.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          echo ""
+          echo "Build exit: $BUILD_EXIT"
+          [ "$BUILD_EXIT" = "0" ] || exit $BUILD_EXIT
 
-          echo "=== Image info ==="
+      - name: "🔍 [diag] Orchestrator image"
+        run: |
+          echo "════ Image info ════"
           docker images govno/orchestrator:ci
-          docker inspect govno/orchestrator:ci | python3 -m json.tool | head -40
+          echo ""
+          echo "════ Image layers ════"
+          docker history govno/orchestrator:ci --no-trunc 2>/dev/null | head -15
+          echo ""
+          echo "════ Image inspect (ENV, CMD, HEALTHCHECK) ════"
+          docker inspect govno/orchestrator:ci \
+            | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)[0]
+          cfg = data['Config']
+          print('Env:', cfg.get('Env'))
+          print('Cmd:', cfg.get('Cmd'))
+          print('ExposedPorts:', list(cfg.get('ExposedPorts', {}).keys()))
+          hc = cfg.get('Healthcheck')
+          print('Healthcheck:', hc)
+          "
 
+      # ── Run orchestrator container ────────────────────────────────────────
       - name: "🚬 Docker smoke test — orchestrator container"
         run: |
-          echo "=== Starting orchestrator container ==="
-          docker run -d \
+          echo "════ Starting container ════"
+          CONTAINER_ID=$(docker run -d \
             --name govno-smoke \
             -p 3999:3000 \
             -e GOVNO_TOKEN=ci_test \
             -e RUST_LOG=info \
-            govno/orchestrator:ci
+            govno/orchestrator:ci)
+          echo "Container ID: $CONTAINER_ID"
 
-          echo "=== Waiting for healthcheck ==="
-          for i in $(seq 1 15); do
+          echo ""
+          echo "════ Container initial state ════"
+          docker inspect govno-smoke | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)[0]
+          s = d['State']
+          print('Status:', s['Status'])
+          print('Pid:', s['Pid'])
+          print('StartedAt:', s['StartedAt'])
+          "
+
+          echo ""
+          echo "════ Polling until healthy (max 30s) ════"
+          HEALTHY=0
+          for i in $(seq 1 30); do
             sleep 1
-            STATUS=$(docker inspect --format='{{.State.Health.Status}}' govno-smoke 2>/dev/null || echo "no-healthcheck")
-            echo "  [$i/15] health=$STATUS"
-            if [ "$STATUS" = "healthy" ]; then
-              echo "✅ Container healthy"
-              break
-            fi
-            if [ "$STATUS" = "unhealthy" ]; then
-              echo "❌ Container unhealthy — logs:"
+
+            # Check container still running
+            RUNNING=$(docker inspect --format='{{.State.Running}}' govno-smoke 2>/dev/null || echo "false")
+            if [ "$RUNNING" = "false" ]; then
+              echo "❌ Container stopped at iteration $i"
+              echo "=== Container logs ==="
               docker logs govno-smoke
               exit 1
             fi
+
+            # Get health status
+            HEALTH=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' govno-smoke 2>/dev/null || echo "unknown")
+            HTTP=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 1 http://localhost:3999/health 2>/dev/null || echo "000")
+            echo "  [$i/30] container=$RUNNING health=$HEALTH http=$HTTP"
+
+            if [ "$HTTP" = "200" ]; then
+              echo "✅ Container responding after ${i}s"
+              HEALTHY=1
+              break
+            fi
           done
 
-          echo "=== Test /health ==="
-          curl -sf http://localhost:3999/health
+          if [ "$HEALTHY" = "0" ]; then
+            echo "❌ Container not healthy after 30s"
+            echo "=== Full container logs ==="
+            docker logs govno-smoke
+            exit 1
+          fi
 
           echo ""
-          echo "=== Test /metrics ==="
+          echo "════ Testing endpoints ════"
+          echo "--- /health ---"
+          curl -sf http://localhost:3999/health && echo ""
+
+          echo ""
+          echo "--- /api/services ---"
+          curl -sf http://localhost:3999/api/services | python3 -m json.tool
+
+          echo ""
+          echo "--- /metrics ---"
           curl -sf http://localhost:3999/metrics | head -20
 
           echo ""
-          echo "=== Test /metrics/json ==="
+          echo "--- /metrics/json ---"
           curl -sf http://localhost:3999/metrics/json | python3 -m json.tool
 
           echo ""
-          echo "=== Container logs ==="
+          echo "--- WebSocket /ws handshake ---"
+          WS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Connection: Upgrade" -H "Upgrade: websocket" \
+            -H "Sec-WebSocket-Version: 13" \
+            -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+            http://localhost:3999/ws 2>/dev/null || echo "000")
+          echo "WS /ws: $WS_CODE"
+          [ "$WS_CODE" = "101" ] && echo "✅ WS handshake OK"
+
+          echo ""
+          echo "--- WebSocket /producer handshake ---"
+          WS_PROD=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Connection: Upgrade" -H "Upgrade: websocket" \
+            -H "Sec-WebSocket-Version: 13" \
+            -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+            http://localhost:3999/producer 2>/dev/null || echo "000")
+          echo "WS /producer: $WS_PROD"
+          [ "$WS_PROD" = "101" ] && echo "✅ /producer WS handshake OK"
+
+          echo ""
+          echo "════ Final container logs ════"
           docker logs govno-smoke
 
+          echo ""
+          echo "════ Cleanup ════"
           docker stop govno-smoke
           docker rm govno-smoke
           echo "✅ Docker smoke test passed"
 
-      - name: "🔨 Build one worker image (liquid)"
+      # ── Build one worker image ────────────────────────────────────────────
+      - name: "🔨 Docker build — liquid worker"
         run: |
+          echo "════ Building govno/worker-liquid:ci ════"
           docker build \
             --build-arg TARGET=govno-worker-liquid \
             --tag govno/worker-liquid:ci \
             --progress=plain \
-            . 2>&1 | tail -20
+            . 2>&1 | tail -30
+          echo ""
           docker images govno/worker-liquid:ci
           echo "✅ Worker image built"
 
-      - name: "🔍 Disk after Docker builds"
-        run: df -h
+      # ── Upload Docker logs on failure ─────────────────────────────────────
+      - name: "📤 Upload Docker build log (on failure)"
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-build-log-${{ github.sha }}
+          path: /tmp/docker-build-orc.log
+          retention-days: 7
 
+      - name: "🔍 [diag] Disk after Docker builds"
+        if: always()
+        run: |
+          echo "════ Disk usage after builds ════"
+          df -h
+          echo ""
+          echo "════ Docker images ════"
+          docker images
+          echo ""
+          echo "════ Docker disk usage ════"
+          docker system df

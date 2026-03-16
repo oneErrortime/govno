@@ -1,8 +1,9 @@
 [package]
-name    = "govno-workers-common"
+name    = "workers-common"
 version = "0.1.0"
 edition = "2021"
 
+# lib name stays workers_common so code uses workers_common::run(...)
 [lib]
 name = "workers_common"
 

@@ -21,3 +21,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util      = { version = "0.3",  default-features = false, features = ["sink", "std"] }
 tokio-tungstenite = "0.23"
 proto             = { path = "proto" }
+
+# Profiles belong at workspace root — ignored elsewhere
+[profile.release]
+opt-level = "s"
+lto       = true
+panic     = "abort"
