@@ -1,0 +1,39 @@
+FROM rust:1.77-slim AS deps
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev binutils file && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY proto/Cargo.toml proto/Cargo.toml
+COPY orchestrator/Cargo.toml orchestrator/Cargo.toml
+COPY workers/common/Cargo.toml workers/common/Cargo.toml
+COPY workers/liquid/Cargo.toml workers/liquid/Cargo.toml
+COPY workers/solid/Cargo.toml workers/solid/Cargo.toml
+COPY workers/gas/Cargo.toml workers/gas/Cargo.toml
+COPY workers/critical/Cargo.toml workers/critical/Cargo.toml
+COPY client/Cargo.toml client/Cargo.toml
+RUN mkdir -p proto/src orchestrator/src workers/common/src workers/liquid/src workers/solid/src workers/gas/src workers/critical/src client/src     && printf 'pub fn _stub() {}' > proto/src/lib.rs     && printf 'fn main() {}' > orchestrator/src/main.rs     && printf 'pub fn _stub() {}' > workers/common/src/lib.rs     && for w in liquid solid gas critical; do printf 'fn main() {}' > workers/$w/src/main.rs; done     && printf '' > client/src/lib.rs
+RUN cargo build --release --locked -p govno-worker-gas 2>/dev/null || cargo build --release --locked -p govno-orchestrator -p govno-worker-liquid -p govno-worker-solid -p govno-worker-gas -p govno-worker-critical
+
+FROM deps AS builder
+ENV PATH="/usr/local/cargo/bin:${PATH}"
+COPY proto/src proto/src
+COPY orchestrator/src orchestrator/src
+COPY workers/common/src workers/common/src
+COPY workers/liquid/src workers/liquid/src
+COPY workers/solid/src workers/solid/src
+COPY workers/gas/src workers/gas/src
+COPY workers/critical/src workers/critical/src
+RUN find proto/src orchestrator/src workers -name '*.rs' -exec touch {} +
+RUN cargo build --release --locked -p govno-worker-gas
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget && rm -rf /var/lib/apt/lists/* && useradd -r -u 1001 -s /bin/false govno
+COPY --from=builder /app/target/release/govno-worker-gas /usr/local/bin/app
+USER govno
+EXPOSE 3000
+ENV RUST_LOG=info
+ENV GOVNO_TOKEN=govnotoken
+ENV ORCHESTRATOR_URL=wss://govno-zdq0.onrender.com/producer
+ENV LISTEN_ADDR=0.0.0.0:3000
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO- http://localhost:3000/health || exit 1
+CMD ["/usr/local/bin/app"]
