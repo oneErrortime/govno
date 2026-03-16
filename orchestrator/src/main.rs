@@ -490,7 +490,10 @@ async fn main() {
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let addr = env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".into());
+    // Render.com injects PORT; LISTEN_ADDR overrides everything
+    let port = env::var("PORT").unwrap_or_else(|_| "3000".into());
+    let addr = env::var("LISTEN_ADDR")
+        .unwrap_or_else(|_| format!("0.0.0.0:{port}"));
     info!("╔══════════════════════════════════════════════════╗");
     info!("║  💩 ГОВНО-ОРКЕСТРАТОР v0.3.0                     ║");
     info!("║  /producer     ← workers connect here            ║");

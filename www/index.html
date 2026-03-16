@@ -164,7 +164,7 @@ footer code{color:var(--am2)}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <div class="input-group">
         <label>WS URL</label>
-        <input class="field" id="url-input" type="text" value="ws://localhost:3000/ws"/>
+        <input class="field" id="url-input" type="text" value=""/>
       </div>
       <div class="input-group">
         <label>Токен (GOVNO_TOKEN)</label>
@@ -181,9 +181,10 @@ footer code{color:var(--am2)}
       <code>docker compose up --build</code><br>
       или без Docker: <code>cargo run -p govno-orchestrator</code><br><br>
       <strong>Шаг 2 — подключись</strong>:<br>
-      URL: <code>ws://localhost:3000/ws</code><br>
+      localhost: <code>ws://localhost:3000/ws</code><br>      Render/HTTPS: <code>wss://your-app.onrender.com/ws</code><br>
       Токен: <code>говно</code><br><br>
-      <em style="color:var(--mu)">На GitHub Pages Chrome разрешает ws://localhost с https://</em>
+      <em style="color:var(--yw)">⚠️ На https:// странице нужен <strong>wss://</strong> (не ws://).<br>
+      Render URL выглядит так: <code>wss://your-app.onrender.com/ws</code></em>
     </details>
   </div>
 
@@ -307,13 +308,31 @@ Object.assign(window, {
 await init();
 
 // Smart URL default
-const isLocal = ['localhost','127.0.0.1','0.0.0.0'].includes(location.hostname);
 const urlInput = document.getElementById('url-input');
-urlInput.value = isLocal ? 'ws://127.0.0.1:3000/ws' : '';
+
+// Smart URL detection:
+// - localhost → ws:// (no TLS needed)
+// - https:// page → wss:// REQUIRED (browsers block ws:// mixed content)
+// - http:// page  → ws:// works
+const isLocal    = ['localhost','127.0.0.1','0.0.0.0'].includes(location.hostname);
+const isHttps    = location.protocol === 'https:';
+const wsProtocol = (isLocal || !isHttps) ? 'ws' : 'wss';
+
+if (isLocal) {
+  urlInput.value = 'ws://127.0.0.1:3000/ws';
+} else if (isHttps) {
+  // On HTTPS (GitHub Pages, Render frontend, etc.) we need wss://
+  // User must provide their Render/server hostname
+  urlInput.value = '';
+  urlInput.placeholder = 'wss://your-app.onrender.com/ws';
+} else {
+  urlInput.value = 'ws://localhost:3000/ws';
+}
 
 // Auth
 document.getElementById('btn-auth').onclick = async () => {
-  const url   = urlInput.value.trim() || 'ws://127.0.0.1:3000/ws';
+  const url   = urlInput.value.trim() || (isHttps ? '' : 'ws://127.0.0.1:3000/ws');
+  if (!url) { alert('Введи WebSocket URL сервера (wss://...)'); document.getElementById('btn-auth').disabled = false; return; }
   const token = document.getElementById('token-input').value.trim() || 'говно';
   document.getElementById('btn-auth').disabled = true;
   connect(url);
@@ -352,9 +371,11 @@ document.addEventListener('keydown', e => {
 });
 
 // Metrics auto-refresh
-const metricsUrl = () =>
-  (urlInput.value.trim() || 'ws://127.0.0.1:3000/ws')
-    .replace(/^ws/, 'http').replace('/ws', '') + '/metrics/json';
+const metricsUrl = () => {
+  const wsUrl = urlInput.value.trim() || 'ws://127.0.0.1:3000/ws';
+  // ws:// → http://, wss:// → https://
+  return wsUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/ws$/, '') + '/metrics/json';
+};
 
 async function refreshMetrics() {
   try {
