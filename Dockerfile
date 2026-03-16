@@ -128,9 +128,11 @@ RUN set -ex \
     && echo "=== Building $TARGET ===" \
     && cargo build --release --locked -p "${TARGET}" \
     && echo "=== Build complete ===" \
-    && echo "Binary:" \
     && ls -lh "target/release/${TARGET}" \
-    && file "target/release/${TARGET}"
+    && file "target/release/${TARGET}" \
+    && readelf -h "target/release/${TARGET}" | grep -E "Magic|Class|Type|Machine|Entry" \
+    && ldd  "target/release/${TARGET}" | head -10 \
+    && echo "✅ builder verification complete"
 
 # ── Stage 3: runtime ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
@@ -146,16 +148,22 @@ RUN set -ex \
 
 COPY --from=builder /app/target/release/${TARGET} /usr/local/bin/app
 
-# Verify binary exists, is executable, and is a valid ELF — WITHOUT running it.
-# We deliberately do NOT run the binary here: it's a long-running server that
-# would bind to port 3000 and hang the docker build indefinitely.
+# Verify binary in runtime stage using ONLY POSIX tools.
+# debian:bookworm-slim does NOT have 'file', 'readelf', or 'binutils'.
+# 'file' and 'readelf' are only in the builder stage (rust:slim + binutils).
+# We use 'od' (always in POSIX) to read ELF magic bytes manually.
+# ELF magic: bytes 0-3 must be 7f 45 4c 46 (\x7fELF)
+# We deliberately do NOT execute the binary — it is a long-running server.
 RUN set -ex \
-    && echo "=== Verifying binary ===" \
+    && echo "=== Runtime binary verification (POSIX only) ===" \
     && ls -lh /usr/local/bin/app \
-    && file /usr/local/bin/app \
+    && [ -f /usr/local/bin/app ] && echo "✅ file exists" \
     && [ -x /usr/local/bin/app ] && echo "✅ executable bit set" \
-    && readelf -h /usr/local/bin/app | grep -E "Magic|Class|Type|Machine" \
-    && echo "✅ Binary verification complete — NOT starting server in build"
+    && [ $(wc -c < /usr/local/bin/app) -gt 1000000 ] && echo "✅ size >1MB (not truncated)" \
+    && MAGIC=$(od -A n -t x1 -N 4 /usr/local/bin/app | tr -d ' \n') \
+    && echo "ELF magic bytes: $MAGIC  (expected: 7f454c46)" \
+    && [ "$MAGIC" = "7f454c46" ] && echo "✅ valid ELF magic" \
+    && echo "✅ runtime verification complete — binary is a valid ELF executable"
 
 USER govno
 EXPOSE 3000
