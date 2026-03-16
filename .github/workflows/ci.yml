@@ -16,7 +16,9 @@ env:
   CARGO_LOG: "cargo::core::compiler::fingerprint=trace"
 
 permissions:
-  contents: write
+  contents: write   # needed for native/docker jobs (artifacts, cache)
+  pages: write      # needed by actions/deploy-pages
+  id-token: write   # needed by actions/deploy-pages (OIDC)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 jobs:
@@ -861,36 +863,65 @@ jobs:
             /tmp/wasm-check.jsonl
           retention-days: 7
 
-      # ── GitHub Pages deploy ───────────────────────────────────────────────
-      - name: "🚀 Deploy to GitHub Pages"
-        uses: peaceiris/actions-gh-pages@v4
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./www
-          commit_message: "💩 deploy: ${{ github.sha }}"
-          enable_jekyll: false   # writes .nojekyll to gh-pages branch root
+      # ── GitHub Pages ─────────────────────────────────────────────────────
+      # Uses the official GitHub Pages API (not gh-pages branch push).
+      # This approach:
+      #   1. Uploads www/ as a Pages artifact via actions/upload-pages-artifact
+      #   2. Deploys it via actions/deploy-pages (OIDC, no token needed)
+      #   3. Auto-configures Pages source — no manual Settings change required
+      #   4. Works even on first run (no existing gh-pages branch needed)
+      # Requires: permissions: pages: write, id-token: write (set at workflow level)
 
-      - name: "🔍 [diag] Pages deploy result"
+      - name: "🔍 [diag] Pages artifact contents"
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
-          REPO="${{ github.repository }}"
-          OWNER="${{ github.repository_owner }}"
-          REPO_NAME="${{ github.event.repository.name }}"
-          echo "════ GitHub Pages deployment ════"
-          echo "  URL: https://${OWNER}.github.io/${REPO_NAME}/"
-          echo "  Deployed from: ./www"
-          echo "  Published files:"
+          echo "════ Files to deploy (www/) ════"
           find www -type f | sort | while read f; do
-            echo "    $f ($(du -h "$f" | cut -f1))"
+            printf "  %-50s %s\n" "$f" "$(du -h "$f" | cut -f1)"
           done
           echo ""
-          echo "════ ⚠️  IMPORTANT — if you see only README on GitHub Pages ════"
-          echo "  Go to: https://github.com/${REPO}/settings/pages"
-          echo "  Set:   Source → 'Deploy from a branch'"
-          echo "         Branch → 'gh-pages'  /  '(root)'"
-          echo "  The gh-pages branch was created/updated by this workflow."
-          echo "  GitHub Pages will serve from it after you configure the source."
+          echo "════ Critical files must exist ════"
+          for f in www/index.html www/.nojekyll www/pkg/govno_client_bg.wasm www/pkg/govno_client.js; do
+            [ -f "$f" ] \
+              && echo "  ✅ $f ($(wc -c < "$f" | tr -d ' ') bytes)" \
+              || echo "  ❌ MISSING: $f"
+          done
+          echo ""
+          echo "════ WASM magic bytes ════"
+          xxd www/pkg/govno_client_bg.wasm | head -1
+          echo ""
+          echo "════ Total deploy size ════"
+          du -sh www/
+
+      - name: "⚙️  Setup GitHub Pages"
+      # configure-pages enables Pages on the repo (API call) and sets base URL.
+      # FIRST RUN: if this fails, go to Settings -> Pages -> Source -> "GitHub Actions"
+        uses: actions/configure-pages@v5
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+      - name: "📦 Upload Pages artifact"
+        uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        with:
+          path: ./www
+          # artifact name must be 'github-pages' (default, required by deploy-pages)
+          name: github-pages
+
+      - name: "🚀 Deploy to GitHub Pages"
+        id: pages-deploy
+        uses: actions/deploy-pages@v4
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+      - name: "✅ Pages deploy summary"
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          echo "════ Deployment result ════"
+          echo "  Page URL: ${{ steps.pages-deploy.outputs.page_url }}"
+          echo "  Files deployed: $(find www -type f | wc -l)"
+          echo "  WASM size: $(du -h www/pkg/*.wasm | cut -f1)"
+          echo ""
+          echo "════ URL to open ════"
+          echo "  ${{ steps.pages-deploy.outputs.page_url }}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
