@@ -97,12 +97,12 @@ pub fn export_log() {
     parts.push(&js_sys::JsString::from(json.as_str()).into());
 
     // BlobPropertyBag::set_type() is the non-deprecated replacement for type_()
-    let mut opts = web_sys::BlobPropertyBag::new();
+    let opts = web_sys::BlobPropertyBag::new();
     opts.set_type("application/json");
 
     let blob = web_sys::Blob::new_with_str_sequence_and_options(&parts, &opts).ok();
     if let Some(blob) = blob {
-        if let Some(url) = web_sys::Url::create_object_url_with_blob(&blob).ok() {
+        if let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) {
             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
                 if let Ok(el) = doc.create_element("a") {
                     if let Ok(a) = el.dyn_into::<web_sys::HtmlAnchorElement>() {

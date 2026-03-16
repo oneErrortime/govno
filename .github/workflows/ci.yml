@@ -617,22 +617,58 @@ jobs:
           echo ""
 
           echo "════ Deprecated API checks ════"
-          # Verify known deprecated calls are suppressed
+          # canvas.rs: set_fill_style/set_stroke_style deprecated in web-sys 0.3.91
           if grep -n 'set_fill_style\|set_stroke_style' client/src/canvas.rs > /tmp/depr.txt; then
             if grep -q 'allow(deprecated)' client/src/canvas.rs; then
-              echo "  ✅ canvas.rs: deprecated calls present but #[allow(deprecated)] guards them"
+              echo "  ✅ canvas.rs: deprecated calls guarded by #[allow(deprecated)]"
             else
               echo "  ❌ canvas.rs: deprecated calls WITHOUT #[allow(deprecated)]"
-              cat /tmp/depr.txt
-              exit 1
+              cat /tmp/depr.txt; exit 1
             fi
           fi
-          if grep -n '\.type_(' client/src/lib.rs > /tmp/depr2.txt; then
-            echo "  ❌ lib.rs: still uses deprecated .type_() — should be .set_type()"
-            cat /tmp/depr2.txt
-            exit 1
+          # lib.rs: type_() deprecated → set_type()
+          if grep -n '\.type_(' client/src/lib.rs > /tmp/depr2.txt 2>/dev/null; then
+            echo "  ❌ lib.rs: deprecated .type_() found"; cat /tmp/depr2.txt; exit 1
           else
             echo "  ✅ lib.rs: no deprecated .type_() calls"
+          fi
+
+          echo ""
+          echo "════ clippy::match_result_ok — if let Some(x) = y.ok() ════"
+          # Clippy flags this: should be 'if let Ok(x) = y'
+          if grep -rn "if let Some.*\.ok()" client/src/ orchestrator/src/; then
+            echo "  ❌ Found if let Some(...).ok() pattern — use if let Ok(...) instead"; exit 1
+          else
+            echo "  ✅ No if let Some(...).ok() patterns"
+          fi
+
+          echo ""
+          echo "════ unused_mut: let mut where value is never reassigned ════"
+          # BlobPropertyBag::new() returns immutable value — common trap
+          if grep -n "let mut opts = web_sys::BlobPropertyBag::new()" client/src/lib.rs; then
+            echo "  ❌ let mut opts not needed (opts is not reassigned)"; exit 1
+          else
+            echo "  ✅ No unnecessary let mut opts"
+          fi
+
+          echo ""
+          echo "════ dead_code: audio functions must be called ════"
+          for fn in beep_critical beep_soft; do
+            callers=$(grep -rn "audio::${fn}\|${fn}()" client/src/ | grep -v "^client/src/audio.rs" | wc -l | tr -d ' ')
+            if [ "$callers" -gt "0" ]; then
+              echo "  ✅ ${fn}() is called ($callers call sites)"
+            else
+              echo "  ❌ ${fn}() is defined but never called — dead_code error"
+              exit 1
+            fi
+          done
+
+          echo ""
+          echo "════ single_component_path_imports: bare 'use X;' ════"
+          if grep -rn "^use [a-z_]*;$" orchestrator/src/ client/src/; then
+            echo "  ❌ Redundant bare 'use X;' imports found"; exit 1
+          else
+            echo "  ✅ No redundant bare imports"
           fi
           echo ""
 

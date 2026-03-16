@@ -287,9 +287,11 @@ fn handle_shit_message(payload: protocol::ShitPayload) {
 
     dom::log_msg(&text, class);
 
-    // Critical: toast + audio
+    // Audio feedback
     if is_critical {
         dom::show_toast(&format!("🚨 {}", payload.payload));
         audio::beep_critical();
+    } else {
+        audio::beep_soft();  // subtle tick for subscribed messages
     }
 }

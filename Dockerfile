@@ -23,9 +23,11 @@ FROM rust:1.77-slim AS deps
 ARG DEBIAN_FRONTEND=noninteractive
 RUN set -ex \
     && apt-get update \
-    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && apt-get install -y --no-install-recommends \
+         pkg-config libssl-dev \
+         binutils file \
     && rm -rf /var/lib/apt/lists/* \
-    && echo "✅ system deps installed"
+    && echo "✅ system deps installed (pkg-config, libssl-dev, binutils, file)"
 
 RUN rustc --version && cargo --version && rustup show
 
