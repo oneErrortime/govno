@@ -32,6 +32,29 @@ use tracing::{info, warn, error};
 
 use proto::{OrchestratorMsg, Priority, ProducerMsg, ShitTopic};
 
+/// Minimal HTTP health server for Render free-tier web services.
+/// Render requires a bound port even for background-style services.
+/// Listens on $PORT (or 3000) and responds 200 OK to any request.
+async fn health_server() {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+
+    let port = env::var("PORT").unwrap_or_else(|_| "3000".into());
+    let addr = format!("0.0.0.0:{port}");
+    let listener = TcpListener::bind(&addr).await
+        .expect("health server bind");
+    info!("💉 health server listening on {addr}");
+
+    loop {
+        if let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+                let _ = stream.write_all(response).await;
+            });
+        }
+    }
+}
+
 /// Configuration for a shit worker microservice.
 /// Fill this in and call `run()` from main.
 pub struct WorkerConfig {
@@ -55,12 +78,15 @@ pub fn run(cfg: WorkerConfig) {
         )
         .init();
 
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("tokio runtime");
 
-    rt.block_on(reconnect_loop(cfg));
+    rt.block_on(async {
+        tokio::spawn(health_server());
+        reconnect_loop(cfg).await;
+    });
 }
 
 /// Reconnect loop with exponential backoff.

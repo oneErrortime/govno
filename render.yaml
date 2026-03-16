@@ -14,7 +14,7 @@ services:
       - key: LISTEN_ADDR
         value: 0.0.0.0:3000
 
-  - type: worker
+  - type: web
     name: govno-worker-liquid
     runtime: docker
     dockerfilePath: ./Dockerfile.worker-liquid
@@ -26,7 +26,7 @@ services:
       - key: RUST_LOG
         value: info
 
-  - type: worker
+  - type: web
     name: govno-worker-solid
     runtime: docker
     dockerfilePath: ./Dockerfile.worker-solid
@@ -38,7 +38,7 @@ services:
       - key: RUST_LOG
         value: info
 
-  - type: worker
+  - type: web
     name: govno-worker-gas
     runtime: docker
     dockerfilePath: ./Dockerfile.worker-gas
@@ -50,7 +50,7 @@ services:
       - key: RUST_LOG
         value: info
 
-  - type: worker
+  - type: web
     name: govno-worker-critical
     runtime: docker
     dockerfilePath: ./Dockerfile.worker-critical
