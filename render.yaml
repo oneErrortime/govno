@@ -22,7 +22,7 @@ services:
     plan: free
     envVars:
       - key: ORCHESTRATOR_URL
-        value: wss://govno-zdq0.onrender.com/producer
+        value: wss://govno-orchestrator.onrender.com/producer
       - key: RUST_LOG
         value: info
 
@@ -34,7 +34,7 @@ services:
     plan: free
     envVars:
       - key: ORCHESTRATOR_URL
-        value: wss://govno-zdq0.onrender.com/producer
+        value: wss://govno-orchestrator.onrender.com/producer
       - key: RUST_LOG
         value: info
 
@@ -46,7 +46,7 @@ services:
     plan: free
     envVars:
       - key: ORCHESTRATOR_URL
-        value: wss://govno-zdq0.onrender.com/producer
+        value: wss://govno-orchestrator.onrender.com/producer
       - key: RUST_LOG
         value: info
 
@@ -58,6 +58,6 @@ services:
     plan: free
     envVars:
       - key: ORCHESTRATOR_URL
-        value: wss://govno-zdq0.onrender.com/producer
+        value: wss://govno-orchestrator.onrender.com/producer
       - key: RUST_LOG
         value: info
