@@ -46,7 +46,7 @@ use proto::{
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const BROADCAST_CAP: usize  = 512;
-const AUTH_TIMEOUT_SECS: u64 = 10;
+const AUTH_TIMEOUT_SECS: u64 = 120;
 
 // ── Metrics ───────────────────────────────────────────────────────────────────
 
