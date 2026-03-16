@@ -1,0 +1,75 @@
+services:
+
+  # ── Оркестратор (Web Service — принимает HTTP + WS) ───────────────────────
+  - type: web
+    name: govno-orchestrator
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerBuildArgs:
+      TARGET: govno-orchestrator
+    plan: free
+    envVars:
+      - key: GOVNO_TOKEN
+        value: говно
+      - key: RUST_LOG
+        value: info
+      - key: LISTEN_ADDR
+        value: 0.0.0.0:3000
+
+  # ── Воркеры (Background Worker — только исходящий WS к оркестратору) ──────
+  - type: worker
+    name: govno-worker-liquid
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerBuildArgs:
+      TARGET: govno-worker-liquid
+    plan: free
+    envVars:
+      - key: ORCHESTRATOR_URL
+        value: wss://govno-zdq0.onrender.com/producer
+      - key: RUST_LOG
+        value: info
+
+  - type: worker
+    name: govno-worker-solid
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerBuildArgs:
+      TARGET: govno-worker-solid
+    plan: free
+    envVars:
+      - key: ORCHESTRATOR_URL
+        value: wss://govno-zdq0.onrender.com/producer
+      - key: RUST_LOG
+        value: info
+
+  - type: worker
+    name: govno-worker-gas
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerBuildArgs:
+      TARGET: govno-worker-gas
+    plan: free
+    envVars:
+      - key: ORCHESTRATOR_URL
+        value: wss://govno-zdq0.onrender.com/producer
+      - key: RUST_LOG
+        value: info
+
+  - type: worker
+    name: govno-worker-critical
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerBuildArgs:
+      TARGET: govno-worker-critical
+    plan: free
+    envVars:
+      - key: ORCHESTRATOR_URL
+        value: wss://govno-zdq0.onrender.com/producer
+      - key: RUST_LOG
+        value: info
