@@ -3,7 +3,6 @@
 use std::cell::RefCell;
 use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use web_sys::{CloseEvent, ErrorEvent, MessageEvent, WebSocket};
-use serde::Serialize;
 
 use crate::{audio, dom, protocol::{self, ServerMsg}, state};
 

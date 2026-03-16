@@ -20,7 +20,7 @@ features = [
     "WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType",
     # DOM core
     "Window", "Document", "Element", "HtmlElement", "HtmlInputElement",
-    "HtmlSelectElement", "Node", "NodeList", "EventTarget", "Event",
+    "HtmlSelectElement", "Node", "NodeList", "HtmlCollection", "EventTarget", "Event",
     "KeyboardEvent", "MouseEvent",
     # Canvas for sparklines
     "CanvasRenderingContext2d", "HtmlCanvasElement",
