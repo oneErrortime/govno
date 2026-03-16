@@ -146,10 +146,16 @@ RUN set -ex \
 
 COPY --from=builder /app/target/release/${TARGET} /usr/local/bin/app
 
-# Verify binary is runnable before baking image
-RUN /usr/local/bin/app --version 2>/dev/null || \
-    /usr/local/bin/app --help    2>/dev/null || \
-    echo "(binary has no --version flag, that is OK)"
+# Verify binary exists, is executable, and is a valid ELF — WITHOUT running it.
+# We deliberately do NOT run the binary here: it's a long-running server that
+# would bind to port 3000 and hang the docker build indefinitely.
+RUN set -ex \
+    && echo "=== Verifying binary ===" \
+    && ls -lh /usr/local/bin/app \
+    && file /usr/local/bin/app \
+    && [ -x /usr/local/bin/app ] && echo "✅ executable bit set" \
+    && readelf -h /usr/local/bin/app | grep -E "Magic|Class|Type|Machine" \
+    && echo "✅ Binary verification complete — NOT starting server in build"
 
 USER govno
 EXPOSE 3000
