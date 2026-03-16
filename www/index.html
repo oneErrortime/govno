@@ -164,22 +164,26 @@ footer code{color:var(--am2)}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <div class="input-group">
         <label>WS URL</label>
-        <input class="field" id="url-input" type="text" placeholder="ws://localhost:3000/ws"/>
+        <input class="field" id="url-input" type="text" value="ws://localhost:3000/ws"/>
       </div>
       <div class="input-group">
         <label>Токен (GOVNO_TOKEN)</label>
-        <input class="field" id="token-input" type="password" placeholder="говно"/>
+        <input class="field" id="token-input" type="text" value="говно"/>
       </div>
     </div>
     <button class="btn btn-am" id="btn-auth" style="width:100%;padding:10px">
       🚀 Войти в говно-систему
     </button>
-    <details class="hint">
-      <summary>🐳 Как запустить стек?</summary><br>
-      <code>docker compose up</code> — поднимает оркестратор + все 4 воркера + nginx<br>
-      <code>docker compose run --rm wasm-builder</code> — только если нужно пересобрать WASM<br><br>
-      Вручную: <code>GOVNO_TOKEN=говно cargo run -p govno-orchestrator</code><br>
-      На GitHub Pages: введи URL своего сервера (Chrome разрешает ws:// с https://).
+    <details class="hint" open>
+      <summary>📖 Как подключиться</summary><br>
+      <strong style="color:var(--am)">Токен по умолчанию: <code style="font-size:1rem">говно</code></strong><br><br>
+      <strong>Шаг 1 — запусти сервер</strong> (локально на своей машине):<br>
+      <code>docker compose up --build</code><br>
+      или без Docker: <code>cargo run -p govno-orchestrator</code><br><br>
+      <strong>Шаг 2 — подключись</strong>:<br>
+      URL: <code>ws://localhost:3000/ws</code><br>
+      Токен: <code>говно</code><br><br>
+      <em style="color:var(--mu)">На GitHub Pages Chrome разрешает ws://localhost с https://</em>
     </details>
   </div>
 
