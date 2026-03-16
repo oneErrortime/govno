@@ -1,6 +1,6 @@
 [package]
-name = "govno-client"
-version = "0.2.0"
+name    = "govno-client"
+version = "0.3.0"
 edition = "2021"
 
 [lib]
@@ -10,15 +10,29 @@ crate-type = ["cdylib"]
 wasm-bindgen         = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys               = "0.3"
-serde                = { version = "1", features = ["derive"] }
-serde_json           = "1"
+serde                = { workspace = true }
+serde_json           = { workspace = true }
 
 [dependencies.web-sys]
 version = "0.3"
 features = [
+    # WebSocket
     "WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType",
+    # DOM core
     "Window", "Document", "Element", "HtmlElement", "HtmlInputElement",
-    "Node", "EventTarget", "Event", "console",
+    "HtmlSelectElement", "Node", "NodeList", "EventTarget", "Event",
+    "KeyboardEvent", "MouseEvent",
+    # Canvas for sparklines
+    "CanvasRenderingContext2d", "HtmlCanvasElement",
+    # Audio for critical alerts
+    "AudioContext", "AudioContextOptions", "AudioDestinationNode", "AudioNode",
+    "AudioParam", "OscillatorNode", "OscillatorType", "GainNode",
+    # Blob + URL for log export
+    "Blob", "BlobPropertyBag", "Url", "HtmlAnchorElement",
+    # Performance for hi-res timestamps
+    "Performance",
+    # console
+    "console",
 ]
 
 [profile.release]

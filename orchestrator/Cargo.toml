@@ -1,0 +1,19 @@
+[package]
+name    = "govno-orchestrator"
+version = "0.3.0"
+edition = "2021"
+
+[[bin]]
+name = "govno-orchestrator"
+path = "src/main.rs"
+
+[dependencies]
+axum          = { version = "0.7", features = ["ws"] }
+tokio         = { workspace = true }
+tower-http    = { version = "0.5", features = ["cors"] }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+rand          = { workspace = true }
+tracing       = { workspace = true }
+tracing-subscriber = { workspace = true }
+proto         = { workspace = true }

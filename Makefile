@@ -1,41 +1,41 @@
-.PHONY: server client www dev clean check
+.PHONY: orchestrator workers-all wasm www dev clean check fmt
 
-# ─── Говно-сервер ────────────────────────────────────────────────────────────
-server:
-	cargo run -p govno-server
+orchestrator:
+	GOVNO_TOKEN=говно cargo run -p govno-orchestrator
 
-server-release:
-	cargo build -p govno-server --release
+liquid:
+	cargo run -p govno-worker-liquid
 
-# ─── WASM-клиент ─────────────────────────────────────────────────────────────
-client:
+solid:
+	cargo run -p govno-worker-solid
+
+gas:
+	cargo run -p govno-worker-gas
+
+critical:
+	cargo run -p govno-worker-critical
+
+wasm:
 	wasm-pack build client --target web --out-dir ../www/pkg --dev
 
-client-release:
+wasm-release:
 	wasm-pack build client --target web --out-dir ../www/pkg --release
 
-# ─── Статика ─────────────────────────────────────────────────────────────────
-# После билда клиента открой http://localhost:8080
-www: client
+www: wasm
 	cd www && python3 -m http.server 8080
 
-# ─── Всё сразу (в двух терминалах) ──────────────────────────────────────────
-# terminal 1:  make server
-# terminal 2:  make www
-
-# ─── Dev: только пересобрать клиент и серв ───────────────────────────────────
-dev: client server
-
-# ─── Проверки ────────────────────────────────────────────────────────────────
 check:
-	cargo check -p govno-server
+	cargo check -p govno-orchestrator
 	cargo check -p govno-client --target wasm32-unknown-unknown
+	cargo check -p workers_common
 
 clippy:
-	cargo clippy -p govno-server
-	cargo clippy -p govno-client --target wasm32-unknown-unknown
+	cargo clippy -p govno-orchestrator -- -D warnings
+	cargo clippy -p govno-client --target wasm32-unknown-unknown -- -D warnings
 
-# ─── Cleanup ─────────────────────────────────────────────────────────────────
+fmt:
+	cargo fmt --all
+
 clean:
 	cargo clean
 	rm -rf www/pkg

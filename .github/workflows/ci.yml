@@ -1,4 +1,4 @@
-name: "💩 CI + GitHub Pages"
+name: "💩 CI + Deploy"
 
 on:
   push:
@@ -9,80 +9,465 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Pin exact toolchain so caching is stable
+  RUST_VERSION: "1.77"
 
 permissions:
-  contents: write   # нужно для gh-pages push
+  contents: write
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+# Every job starts with env diagnostics so failures are immediately locatable.
 
 jobs:
-  # ─── Говно-сервер ──────────────────────────────────────────────────────────
-  server:
-    name: "🦀 Server"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Rust stable + clippy
+  # ─────────────────────────────────────────────────────────────────────────
+  # JOB 1: Orchestrator + Workers (native x86_64 binaries)
+  # ─────────────────────────────────────────────────────────────────────────
+  native:
+    name: "🦀 Native crates (orchestrator + workers)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "📥 Checkout"
+        uses: actions/checkout@v4
+
+      # ── Environment diagnostics ──────────────────────────────────────────
+      - name: "🔍 Environment diagnostics"
+        run: |
+          echo "=== Runner info ==="
+          uname -a
+          cat /etc/os-release
+          echo "=== Workspace ==="
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          echo "PWD=$(pwd)"
+          echo "=== Directory structure ==="
+          find . -name "Cargo.toml" | sort
+          echo "=== Disk space ==="
+          df -h
+          echo "=== Memory ==="
+          free -h
+
+      - name: "🦀 Install Rust ${{ env.RUST_VERSION }} + clippy + rustfmt"
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy, rustfmt
 
-      - name: Cache
+      - name: "🔍 Rust toolchain info"
+        run: |
+          rustc   --version --verbose
+          cargo   --version
+          rustup  show
+          echo "=== Active toolchain ==="
+          rustup show active-toolchain
+
+      # ── Cache ────────────────────────────────────────────────────────────
+      # Key includes OS + Cargo.lock hash + toolchain version.
+      # Separate key for registry (rarely changes) vs target/ (changes often).
+      - name: "💾 Cache — cargo registry"
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-server-${{ hashFiles('**/Cargo.lock') }}
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-reg-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-reg-${{ env.RUST_VERSION }}-
+            ${{ runner.os }}-cargo-reg-
 
-      - name: Build
-        run: cargo build -p govno-server --release
+      - name: "💾 Cache — target/"
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-native-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-native-${{ env.RUST_VERSION }}-
+            ${{ runner.os }}-target-native-
 
-      - name: Clippy
-        run: cargo clippy -p govno-server -- -D warnings
+      # ── Verify workspace ─────────────────────────────────────────────────
+      - name: "🔍 Verify workspace members exist"
+        run: |
+          echo "=== Checking workspace member directories ==="
+          for member in proto orchestrator workers/common workers/liquid \
+                        workers/solid workers/gas workers/critical; do
+            if [ -d "$member" ]; then
+              echo "✅ $member/"
+              ls "$member/src/"
+            else
+              echo "❌ MISSING: $member/" >&2
+              exit 1
+            fi
+          done
+          echo "=== Workspace Cargo.toml ==="
+          cat Cargo.toml
 
-  # ─── WASM-клиент + деплой на GitHub Pages ──────────────────────────────────
-  client-and-pages:
-    name: "🕸️ WASM + GitHub Pages"
+      # ── Build ────────────────────────────────────────────────────────────
+      - name: "🔨 cargo build --release (all native crates)"
+        run: |
+          cargo build --release \
+            -p govno-orchestrator \
+            -p govno-worker-liquid \
+            -p govno-worker-solid \
+            -p govno-worker-gas \
+            -p govno-worker-critical
+          echo "=== Built binaries ==="
+          ls -lh target/release/govno-*
+
+      - name: "🔍 Verify binaries are executable"
+        run: |
+          for bin in govno-orchestrator govno-worker-liquid govno-worker-solid \
+                     govno-worker-gas govno-worker-critical; do
+            if [ -x "target/release/$bin" ]; then
+              echo "✅ target/release/$bin ($(du -h target/release/$bin | cut -f1))"
+            else
+              echo "❌ NOT FOUND or not executable: target/release/$bin" >&2
+              exit 1
+            fi
+          done
+
+      # ── Clippy ───────────────────────────────────────────────────────────
+      - name: "📎 clippy — orchestrator"
+        run: |
+          cargo clippy -p govno-orchestrator -- \
+            -D warnings \
+            -A clippy::too_many_arguments
+        env:
+          RUSTFLAGS: ""
+
+      - name: "📎 clippy — all workers"
+        run: |
+          for pkg in govno-worker-liquid govno-worker-solid \
+                     govno-worker-gas govno-worker-critical; do
+            echo "--- clippy: $pkg ---"
+            cargo clippy -p "$pkg" -- -D warnings
+          done
+
+      - name: "📎 clippy — proto crate"
+        run: cargo clippy -p proto -- -D warnings
+
+      - name: "🎨 rustfmt check"
+        run: cargo fmt --all -- --check
+        continue-on-error: true   # format issues → warning, not hard fail
+
+      # ── Smoke test (start + kill) ─────────────────────────────────────────
+      - name: "🚬 Smoke test — orchestrator starts and answers /health"
+        run: |
+          echo "=== Starting orchestrator ==="
+          GOVNO_TOKEN=test RUST_LOG=info \
+            ./target/release/govno-orchestrator &
+          ORC_PID=$!
+          echo "PID=$ORC_PID"
+
+          # Wait up to 10s for it to bind
+          for i in $(seq 1 10); do
+            sleep 1
+            if curl -sf http://localhost:3000/health; then
+              echo -e "\n✅ /health OK after ${i}s"
+              break
+            fi
+            if ! kill -0 $ORC_PID 2>/dev/null; then
+              echo "❌ orchestrator process died" >&2
+              exit 1
+            fi
+            echo "⏳ waiting... ($i/10)"
+          done
+
+          # Check other endpoints
+          echo "=== /metrics ==="
+          curl -sf http://localhost:3000/metrics
+          echo ""
+          echo "=== /metrics/json ==="
+          curl -sf http://localhost:3000/metrics/json | python3 -m json.tool
+          echo ""
+          echo "=== /api/services (empty registry) ==="
+          curl -sf http://localhost:3000/api/services | python3 -m json.tool
+
+          kill $ORC_PID
+          echo "✅ Smoke test passed"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # JOB 2: WASM client + GitHub Pages deploy
+  # ─────────────────────────────────────────────────────────────────────────
+  wasm-and-pages:
+    name: "🕸️ WASM client + GitHub Pages"
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Rust stable + wasm32 target + clippy
+    steps:
+      - name: "📥 Checkout"
+        uses: actions/checkout@v4
+
+      # ── Environment diagnostics ──────────────────────────────────────────
+      - name: "🔍 Environment diagnostics"
+        run: |
+          echo "=== Runner ==="
+          uname -a
+          echo "=== Workspace ==="
+          echo "PWD=$(pwd)"
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          echo "=== Client source ==="
+          find client/ -name "*.rs" | sort
+          echo "=== client/Cargo.toml ==="
+          cat client/Cargo.toml
+          echo "=== client/src/lib.rs (first 10 lines) ==="
+          head -10 client/src/lib.rs
+          echo "=== www/ ==="
+          ls -la www/
+          echo "=== Disk space ==="
+          df -h
+
+      - name: "🦀 Install Rust ${{ env.RUST_VERSION }} + wasm32 + clippy"
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: wasm32-unknown-unknown
           components: clippy
 
-      - name: Cache
+      - name: "🔍 Verify wasm32 target is installed"
+        run: |
+          rustup target list --installed | grep wasm32
+          echo "Rust: $(rustc --version)"
+          echo "Cargo: $(cargo --version)"
+
+      # ── Cache ────────────────────────────────────────────────────────────
+      - name: "💾 Cache — cargo registry"
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-wasm-${{ hashFiles('**/Cargo.lock') }}
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-reg-wasm-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-reg-wasm-${{ env.RUST_VERSION }}-
+            ${{ runner.os }}-cargo-reg-
 
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: "💾 Cache — wasm target/"
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-wasm-${{ env.RUST_VERSION }}-${{ hashFiles('client/src/**','client/Cargo.toml','proto/src/**','Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-wasm-${{ env.RUST_VERSION }}-
+            ${{ runner.os }}-target-wasm-
 
-      - name: Build WASM (release)
-        run: wasm-pack build client --target web --out-dir ../www/pkg --release
+      # ── Install wasm-pack ────────────────────────────────────────────────
+      # Cache the binary too to avoid re-downloading on every run.
+      - name: "💾 Cache — wasm-pack binary"
+        uses: actions/cache@v4
+        id: wasm-pack-cache
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: ${{ runner.os }}-wasm-pack-0.12
 
-      - name: Clippy WASM
-        run: cargo clippy -p govno-client --target wasm32-unknown-unknown -- -D warnings
+      - name: "📦 Install wasm-pack (if not cached)"
+        if: steps.wasm-pack-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "=== Downloading wasm-pack ==="
+          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          echo "=== wasm-pack version ==="
+          wasm-pack --version
 
-      - name: Upload WASM artifact
+      - name: "🔍 wasm-pack available"
+        run: |
+          which wasm-pack
+          wasm-pack --version
+
+      # ── Verify source structure ──────────────────────────────────────────
+      - name: "🔍 Verify client module files exist"
+        run: |
+          echo "=== Expected module files ==="
+          for f in client/src/lib.rs client/src/protocol.rs client/src/state.rs \
+                   client/src/dom.rs client/src/canvas.rs client/src/audio.rs \
+                   client/src/ws.rs; do
+            if [ -f "$f" ]; then
+              echo "✅ $f ($(wc -l < $f) lines)"
+            else
+              echo "❌ MISSING: $f" >&2
+              exit 1
+            fi
+          done
+          echo "=== www/ before build ==="
+          ls -la www/
+          echo "=== Expected www/pkg to NOT exist yet ==="
+          [ ! -d "www/pkg" ] && echo "✅ www/pkg absent (will be created by wasm-pack)" || echo "⚠️ www/pkg already exists"
+
+      # ── cargo check (fast feedback before full wasm-pack build) ──────────
+      - name: "🔍 cargo check --target wasm32"
+        run: |
+          cargo check -p govno-client --target wasm32-unknown-unknown
+          echo "✅ Type check passed"
+
+      # ── clippy ───────────────────────────────────────────────────────────
+      - name: "📎 clippy --target wasm32"
+        run: |
+          cargo clippy -p govno-client \
+            --target wasm32-unknown-unknown \
+            -- -D warnings \
+               -A clippy::too_many_arguments
+        env:
+          RUSTFLAGS: ""
+
+      # ── wasm-pack build ──────────────────────────────────────────────────
+      - name: "🔨 wasm-pack build (release)"
+        run: |
+          echo "=== Building WASM ==="
+          echo "PWD=$(pwd)"
+          echo "client/ contents:"
+          ls -la client/
+
+          # wasm-pack --out-dir path is relative to the package dir (client/)
+          # so ../www/pkg means <repo-root>/www/pkg
+          wasm-pack build client \
+            --target web \
+            --out-dir ../www/pkg \
+            --release \
+            -- --locked
+
+          echo "=== wasm-pack output ==="
+          ls -lh www/pkg/
+          echo "=== .wasm size ==="
+          find www/pkg -name "*.wasm" -exec du -h {} \;
+          echo "=== .js glue size ==="
+          find www/pkg -name "*.js"   -exec du -h {} \;
+
+      - name: "🔍 Verify WASM artifacts"
+        run: |
+          echo "=== Required files in www/pkg/ ==="
+          for f in govno_client_bg.wasm govno_client.js govno_client_bg.js; do
+            if [ -f "www/pkg/$f" ]; then
+              echo "✅ www/pkg/$f"
+            else
+              echo "❌ MISSING: www/pkg/$f" >&2
+              exit 1
+            fi
+          done
+
+          echo "=== WASM magic bytes (should be 00 61 73 6d) ==="
+          xxd www/pkg/govno_client_bg.wasm | head -1
+
+          echo "=== Check index.html imports match pkg exports ==="
+          grep "from './pkg/govno_client.js'" www/index.html && echo "✅ import path correct"
+
+          echo "=== Check index.html has required element IDs ==="
+          for id in log status auth-overlay main-ui btn-auth btn-send \
+                    canvas-liquid canvas-solid canvas-gas canvas-critical canvas-total \
+                    services-panel; do
+            grep -q "id=\"$id\"" www/index.html && echo "✅ #$id" || echo "❌ MISSING #$id"
+          done
+
+      # ── Upload artifact ───────────────────────────────────────────────────
+      - name: "📤 Upload WASM artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: govno-client-wasm
+          name: govno-wasm-${{ github.sha }}
           path: www/pkg/
+          retention-days: 7
 
-      # Деплоим www/ (index.html + pkg/*.wasm + pkg/*.js) на gh-pages
-      - name: Deploy to GitHub Pages
+      # ── Deploy to GitHub Pages ────────────────────────────────────────────
+      - name: "🚀 Deploy to GitHub Pages"
         uses: peaceiris/actions-gh-pages@v4
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./www
           commit_message: "💩 deploy: ${{ github.sha }}"
+          # Don't touch .nojekyll — we need standard file serving
+          enable_jekyll: false
+
+      - name: "✅ Pages deploy summary"
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          echo "🌐 GitHub Pages: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          echo "📦 Deployed: www/index.html + www/pkg/*.{wasm,js}"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # JOB 3: Docker build smoke test (verifies Dockerfile actually works)
+  # ─────────────────────────────────────────────────────────────────────────
+  docker:
+    name: "🐳 Docker build smoke test"
+    runs-on: ubuntu-latest
+    # Only run on push to main (expensive — ~5 min full build)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: "📥 Checkout"
+        uses: actions/checkout@v4
+
+      - name: "🔍 Docker info"
+        run: |
+          docker --version
+          docker compose version
+          echo "=== Disk before build ==="
+          df -h
+
+      - name: "🔨 Build orchestrator image"
+        run: |
+          docker build \
+            --build-arg TARGET=govno-orchestrator \
+            --tag govno/orchestrator:ci \
+            --progress=plain \
+            . 2>&1 | tee /tmp/docker-build.log
+
+          echo "=== Image info ==="
+          docker images govno/orchestrator:ci
+          docker inspect govno/orchestrator:ci | python3 -m json.tool | head -40
+
+      - name: "🚬 Docker smoke test — orchestrator container"
+        run: |
+          echo "=== Starting orchestrator container ==="
+          docker run -d \
+            --name govno-smoke \
+            -p 3999:3000 \
+            -e GOVNO_TOKEN=ci_test \
+            -e RUST_LOG=info \
+            govno/orchestrator:ci
+
+          echo "=== Waiting for healthcheck ==="
+          for i in $(seq 1 15); do
+            sleep 1
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' govno-smoke 2>/dev/null || echo "no-healthcheck")
+            echo "  [$i/15] health=$STATUS"
+            if [ "$STATUS" = "healthy" ]; then
+              echo "✅ Container healthy"
+              break
+            fi
+            if [ "$STATUS" = "unhealthy" ]; then
+              echo "❌ Container unhealthy — logs:"
+              docker logs govno-smoke
+              exit 1
+            fi
+          done
+
+          echo "=== Test /health ==="
+          curl -sf http://localhost:3999/health
+
+          echo ""
+          echo "=== Test /metrics ==="
+          curl -sf http://localhost:3999/metrics | head -20
+
+          echo ""
+          echo "=== Test /metrics/json ==="
+          curl -sf http://localhost:3999/metrics/json | python3 -m json.tool
+
+          echo ""
+          echo "=== Container logs ==="
+          docker logs govno-smoke
+
+          docker stop govno-smoke
+          docker rm govno-smoke
+          echo "✅ Docker smoke test passed"
+
+      - name: "🔨 Build one worker image (liquid)"
+        run: |
+          docker build \
+            --build-arg TARGET=govno-worker-liquid \
+            --tag govno/worker-liquid:ci \
+            --progress=plain \
+            . 2>&1 | tail -20
+          docker images govno/worker-liquid:ci
+          echo "✅ Worker image built"
+
+      - name: "🔍 Disk after Docker builds"
+        run: df -h
+

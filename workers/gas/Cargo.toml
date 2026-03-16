@@ -1,0 +1,10 @@
+[package]
+name    = "govno-worker-gas"
+version = "0.1.0"
+edition = "2021"
+[[bin]]
+name = "govno-worker-gas"
+path = "src/main.rs"
+[dependencies]
+workers_common = { path = "../common" }
+proto          = { workspace = true }

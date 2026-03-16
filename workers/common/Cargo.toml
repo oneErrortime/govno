@@ -1,0 +1,17 @@
+[package]
+name    = "govno-workers-common"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "workers_common"
+
+[dependencies]
+tokio             = { workspace = true }
+serde_json        = { workspace = true }
+rand              = { workspace = true }
+tracing           = { workspace = true }
+tracing-subscriber = { workspace = true }
+futures-util      = { workspace = true }
+tokio-tungstenite = { workspace = true }
+proto             = { workspace = true }

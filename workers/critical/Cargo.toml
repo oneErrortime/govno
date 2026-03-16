@@ -1,0 +1,10 @@
+[package]
+name    = "govno-worker-critical"
+version = "0.1.0"
+edition = "2021"
+[[bin]]
+name = "govno-worker-critical"
+path = "src/main.rs"
+[dependencies]
+workers_common = { path = "../common" }
+proto          = { workspace = true }

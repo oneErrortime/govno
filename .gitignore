@@ -1,2 +1,4 @@
 /target
 www/pkg
+**/*.orig
+.env

@@ -1,280 +1,328 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>💩 ГОВНО-КЛИЕНТ v0.3.0</title>
-  <style>
-    :root {
-      --bg:       #0c0700; --surface: #1a0e00; --surface2: #261500;
-      --border:   #3e2200; --amber: #c97a1a; --amber-dim: #6a3f0a;
-      --cream:    #e8c88a; --muted: #6a4520;
-      --green:    #5ecc6a; --red: #e05555; --yellow: #e8c84a;
-      --mono: "JetBrains Mono","Fira Code",monospace;
-    }
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background: var(--bg); color: var(--cream); font-family: var(--mono);
-      min-height: 100vh; display: flex; flex-direction: column;
-      align-items: center; padding: 20px 12px; gap: 16px;
-    }
-    header { text-align: center; }
-    h1 { font-size: clamp(1.3rem,4vw,2rem); color: var(--amber); text-shadow: 0 0 18px #c97a1a50; }
-    .badges { margin-top: 6px; }
-    .badge {
-      display: inline-block; background: var(--surface2); border: 1px solid var(--border);
-      color: var(--muted); font-size: .68rem; padding: 2px 8px;
-      border-radius: 999px; margin: 2px;
-    }
-    .badge.hi { color: var(--amber); border-color: var(--amber-dim); }
-    .card {
-      width: 100%; max-width: 720px; background: var(--surface);
-      border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
-    }
-    .row {
-      display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-      border-bottom: 1px solid var(--border); background: var(--bg);
-    }
-    .row.nb { border-bottom: none; }
-    .row label { color: var(--muted); font-size: .76rem; white-space: nowrap; }
-    #status { font-weight: 700; font-size: .8rem; }
-    .status-ok { color: var(--green); } .status-connecting { color: var(--yellow); } .status-error { color: var(--red); }
-
-    /* ── AUTH OVERLAY ── */
-    #auth-overlay {
-      padding: 24px; display: flex; flex-direction: column; gap: 14px;
-    }
-    .auth-title { color: var(--amber); font-size: 1rem; font-weight: 700; text-align: center; }
-    .auth-sub   { color: var(--muted); font-size: .76rem; text-align: center; line-height: 1.5; }
-    .input-group { display: flex; flex-direction: column; gap: 6px; }
-    .input-group label { font-size: .76rem; color: var(--muted); }
-    .field {
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 6px; color: var(--cream); font-family: var(--mono);
-      font-size: .82rem; padding: 8px 10px; outline: none; width: 100%;
-    }
-    .field:focus { border-color: var(--amber); }
-    .field::placeholder { color: var(--muted); }
-    .docker-hint {
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 6px; padding: 10px 12px; font-size: .72rem; color: var(--muted);
-      line-height: 1.7;
-    }
-    .docker-hint code { color: var(--amber); }
-    .docker-hint summary { cursor: pointer; color: var(--amber); font-size: .76rem; margin-bottom: 4px; }
-
-    /* ── MAIN UI ── */
-    #main-ui { display: none; flex-direction: column; }
-
-    /* BUTTONS */
-    .btn {
-      padding: 5px 12px; border: none; border-radius: 5px;
-      font-family: var(--mono); font-size: .76rem; font-weight: 700;
-      cursor: pointer; transition: opacity .15s, transform .1s; white-space: nowrap;
-    }
-    .btn:hover:not(:disabled) { opacity: .82; transform: scale(1.03); }
-    .btn:disabled { opacity: .3; cursor: not-allowed; }
-    .btn-amber    { background: var(--amber); color: var(--bg); }
-    .btn-liquid   { background: #1a4060; color: #90d0f8; border: 1px solid #2a6090; }
-    .btn-solid    { background: #3a2a10; color: #e0b060; border: 1px solid #6a4a20; }
-    .btn-gas      { background: #1a2a10; color: #90e060; border: 1px solid #3a5a20; }
-    .btn-critical { background: #3a0a0a; color: #f09090; border: 1px solid #8a2020; }
-    .btn-unsub    { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
-    #sub-label    { margin-left: auto; font-size: .7rem; color: var(--muted); font-style: italic; }
-
-    /* LOG */
-    #log {
-      height: 300px; overflow-y: auto; padding: 10px 14px;
-      display: flex; flex-direction: column; gap: 3px;
-      background: var(--bg); scroll-behavior: smooth;
-    }
-    #log p {
-      font-size: .8rem; line-height: 1.45; padding: 3px 6px;
-      border-radius: 3px; word-break: break-word;
-      animation: fadein .18s ease;
-    }
-    @keyframes fadein { from { opacity:0; transform:translateY(3px); } to { opacity:1; } }
-    .msg-system   { color: var(--muted); font-style: italic; }
-    .msg-client   { color: #a8d8a8; }
-    .msg-echo     { color: var(--cream); background: var(--surface2); }
-    .msg-error    { color: var(--red); }
-    .msg-puk      { color: #f0c060; background: #2a1a00; font-weight: 700; border-left: 3px solid var(--amber); padding-left: 8px; }
-    .msg-liquid   { color: #90d0f8; background: #0a1a28; border-left: 2px solid #2a6090; }
-    .msg-solid    { color: #e0b060; background: #1a1000; border-left: 2px solid #6a4a20; }
-    .msg-gas      { color: #90e060; background: #0a1400; border-left: 2px solid #3a5a20; }
-    .msg-critical { color: #ff8080; background: #2a0000; border-left: 3px solid #cc2020; font-weight: 700; animation: flash .4s ease 3; }
-    @keyframes flash { 0%,100%{background:#2a0000} 50%{background:#4a0000} }
-    #log::-webkit-scrollbar { width: 5px; }
-    #log::-webkit-scrollbar-track  { background: var(--bg); }
-    #log::-webkit-scrollbar-thumb  { background: var(--border); border-radius: 3px; }
-
-    /* METRICS */
-    .metrics-panel { background: var(--bg); border-top: 1px solid var(--border); padding: 10px 14px; }
-    .metrics-head  { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: .74rem; color: var(--muted); }
-    .metrics-head span { color: var(--amber); font-weight: 700; }
-    .metrics-grid  { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-    .metric-box    { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; text-align: center; }
-    .metric-val    { font-size: 1rem; font-weight: 700; color: var(--amber); display: block; }
-    .metric-name   { font-size: .62rem; color: var(--muted); display: block; margin-top: 2px; }
-    .session-row   { font-size: .7rem; color: var(--muted); padding: 4px 12px; background: var(--bg); border-top: 1px solid var(--border); }
-    .session-row code { color: var(--amber-dim); }
-
-    footer { font-size: .67rem; color: var(--muted); text-align: center; }
-    footer code { color: var(--amber-dim); }
-  </style>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>💩 ГОВНО v0.3</title>
+<style>
+:root{
+  --bg:#0c0700;--sf:#180e00;--sf2:#231400;--br:#3e2200;
+  --am:#c97a1a;--am2:#6a3f0a;--cr:#e8c88a;--mu:#6a4520;
+  --gr:#5ecc6a;--rd:#e05555;--yw:#e8c84a;
+  --mono:"JetBrains Mono","Fira Code",monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--cr);font-family:var(--mono);min-height:100vh;
+     display:flex;flex-direction:column;align-items:center;padding:16px 10px;gap:12px}
+h1{font-size:clamp(1.2rem,3.5vw,1.8rem);color:var(--am);text-shadow:0 0 16px #c97a1a50}
+.badges{margin-top:5px}
+.badge{display:inline-block;background:var(--sf2);border:1px solid var(--br);
+       color:var(--mu);font-size:.65rem;padding:2px 7px;border-radius:999px;margin:2px}
+.badge.hi{color:var(--am);border-color:var(--am2)}
+.card{width:100%;max-width:760px;background:var(--sf);border:1px solid var(--br);
+      border-radius:10px;overflow:hidden}
+.row{display:flex;align-items:center;gap:7px;padding:7px 11px;
+     border-bottom:1px solid var(--br);background:var(--bg)}
+.row.nb{border-bottom:none}
+.row label{color:var(--mu);font-size:.74rem;white-space:nowrap}
+#status{font-weight:700;font-size:.78rem}
+.status-ok{color:var(--gr)}.status-connecting{color:var(--yw)}.status-error{color:var(--rd)}
+/* Buttons */
+.btn{padding:5px 11px;border:none;border-radius:5px;font-family:var(--mono);
+     font-size:.73rem;font-weight:700;cursor:pointer;transition:opacity .15s,transform .1s;white-space:nowrap}
+.btn:hover:not(:disabled){opacity:.82;transform:scale(1.04)}
+.btn:disabled{opacity:.28;cursor:not-allowed}
+.btn-am{background:var(--am);color:var(--bg)}
+.btn-liquid{background:#1a4060;color:#90d0f8;border:1px solid #2a6090}
+.btn-solid{background:#3a2a10;color:#e0b060;border:1px solid #6a4a20}
+.btn-gas{background:#1a2a10;color:#90e060;border:1px solid #3a5a20}
+.btn-critical{background:#3a0a0a;color:#f09090;border:1px solid #8a2020}
+.btn-dim{background:var(--sf2);color:var(--mu);border:1px solid var(--br)}
+/* Active topic button */
+[data-active="1"].btn-liquid{background:#2a5080;box-shadow:0 0 8px #60b0e840}
+[data-active="1"].btn-solid{background:#5a4020;box-shadow:0 0 8px #d8a04040}
+[data-active="1"].btn-gas{background:#2a4020;box-shadow:0 0 8px #80d05040}
+[data-active="1"].btn-critical{background:#5a1010;box-shadow:0 0 8px #e0505040}
+/* Auth overlay */
+#auth-overlay{padding:20px;display:flex;flex-direction:column;gap:12px}
+.auth-title{color:var(--am);font-size:.95rem;font-weight:700;text-align:center}
+.auth-sub{color:var(--mu);font-size:.73rem;text-align:center;line-height:1.6}
+.input-group{display:flex;flex-direction:column;gap:5px}
+.input-group label{font-size:.73rem;color:var(--mu)}
+.field{background:var(--sf2);border:1px solid var(--br);border-radius:5px;
+       color:var(--cr);font-family:var(--mono);font-size:.8rem;padding:7px 9px;
+       outline:none;width:100%}
+.field:focus{border-color:var(--am)}
+.field::placeholder{color:var(--mu)}
+details.hint{background:var(--sf2);border:1px solid var(--br);border-radius:6px;
+             padding:8px 11px;font-size:.7rem;color:var(--mu);line-height:1.7}
+details.hint summary{cursor:pointer;color:var(--am);font-size:.73rem;margin-bottom:2px}
+details.hint code{color:var(--am)}
+/* Main UI */
+#main-ui{display:none;flex-direction:column}
+/* Log */
+#log{height:280px;overflow-y:auto;padding:9px 13px;
+     display:flex;flex-direction:column;gap:3px;background:var(--bg);scroll-behavior:smooth}
+#log p{font-size:.78rem;line-height:1.45;padding:3px 6px;border-radius:3px;
+       word-break:break-word;animation:fi .18s ease}
+@keyframes fi{from{opacity:0;transform:translateY(3px)}to{opacity:1}}
+.msg-system{color:var(--mu);font-style:italic}
+.msg-client{color:#a8d8a8}
+.msg-echo{color:var(--cr);background:var(--sf2)}
+.msg-error{color:var(--rd)}
+.msg-puk{color:#f0c060;background:#2a1a00;font-weight:700;border-left:3px solid var(--am);padding-left:8px}
+.msg-liquid{color:#90d0f8;background:#0a1a28;border-left:2px solid #2a6090}
+.msg-solid{color:#e0b060;background:#1a1000;border-left:2px solid #6a4a20}
+.msg-gas{color:#90e060;background:#0a1400;border-left:2px solid #3a5a20}
+.msg-critical{color:#ff8080;background:#2a0000;border-left:3px solid #cc2020;
+              font-weight:700;animation:fl .4s ease 3,fi .18s ease}
+@keyframes fl{0%,100%{background:#2a0000}50%{background:#4a0000}}
+#log::-webkit-scrollbar{width:4px}
+#log::-webkit-scrollbar-track{background:var(--bg)}
+#log::-webkit-scrollbar-thumb{background:var(--br);border-radius:2px}
+/* Filter bar */
+.filter-bar{display:flex;gap:6px}
+.filter-bar input{flex:1;padding:5px 8px}
+/* Sparklines */
+.spark-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;
+             padding:8px 11px;background:var(--bg);border-top:1px solid var(--br)}
+.spark-box{display:flex;flex-direction:column;gap:2px}
+.spark-label{font-size:.64rem;color:var(--mu);text-align:center}
+canvas{width:100%;height:36px;border-radius:3px;display:block}
+/* Rate row */
+.rate-row{display:flex;align-items:center;gap:8px;font-size:.7rem;color:var(--mu);
+          padding:4px 11px;background:var(--bg);border-top:1px solid var(--br);flex-wrap:wrap}
+.rate-item span{color:var(--am);font-weight:700}
+/* Services panel */
+.services-section{padding:8px 11px;border-top:1px solid var(--br);background:var(--bg)}
+.section-title{font-size:.72rem;color:var(--am);font-weight:700;margin-bottom:6px}
+#services-panel{display:flex;flex-wrap:wrap;gap:5px;min-height:24px}
+.service-card{background:var(--sf2);border:1px solid var(--br);border-radius:5px;
+              padding:4px 8px;font-size:.68rem}
+.svc-name{color:var(--cr);font-weight:700}
+.svc-meta{color:var(--mu);margin-top:1px}
+.topic-liquid .svc-name{color:#90d0f8}
+.topic-solid  .svc-name{color:#e0b060}
+.topic-gas    .svc-name{color:#90e060}
+.topic-critical .svc-name{color:#f09090}
+/* Metrics */
+.metrics-panel{padding:8px 11px;border-top:1px solid var(--br);background:var(--bg)}
+.metrics-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:5px}
+.metric-box{background:var(--sf2);border:1px solid var(--br);border-radius:5px;
+             padding:5px 7px;text-align:center}
+.metric-val{font-size:.9rem;font-weight:700;color:var(--am);display:block}
+.metric-name{font-size:.6rem;color:var(--mu);display:block;margin-top:1px}
+/* Session */
+.session-row{font-size:.68rem;color:var(--mu);padding:3px 11px;
+              background:var(--bg);border-top:1px solid var(--br)}
+.session-row code{color:var(--am2)}
+/* Toast */
+.toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-80px);
+       background:#3a0000;border:1px solid #cc2020;color:#ff9090;
+       font-family:var(--mono);font-size:.8rem;padding:10px 16px;border-radius:8px;
+       max-width:500px;text-align:center;z-index:9999;
+       transition:transform .3s ease,opacity .3s ease;opacity:0}
+.toast-visible{transform:translateX(-50%) translateY(0);opacity:1}
+footer{font-size:.65rem;color:var(--mu);text-align:center}
+footer code{color:var(--am2)}
+</style>
 </head>
 <body>
 
-<header>
-  <h1>💩 ГОВНО-КЛИЕНТ v0.3.0</h1>
+<header style="text-align:center">
+  <h1>💩 ГОВНО v0.3.0</h1>
   <div class="badges">
     <span class="badge hi">Rust → WASM</span>
-    <span class="badge hi">auth + 💨 пук</span>
-    <span class="badge hi">priority broadcast</span>
-    <span class="badge hi">Prometheus</span>
+    <span class="badge hi">microservices</span>
+    <span class="badge hi">dynamic registry</span>
+    <span class="badge hi">sparklines</span>
+    <span class="badge hi">audio alerts</span>
     <span class="badge">0 строк JS бизнес-логики</span>
   </div>
 </header>
 
+<div id="toast" class="toast"></div>
+
 <div class="card">
 
-  <!-- статус -->
+  <!-- Status bar -->
   <div class="row">
     <label>статус:</label>
-    <span id="status" class="status-connecting">⏳ инициализация...</span>
+    <span id="status" class="status-connecting">⏳ загрузка WASM...</span>
+    <span style="margin-left:auto;font-size:.68rem;color:var(--mu)">
+      session: <code id="session-id" style="color:var(--am2)">—</code>
+    </span>
   </div>
 
-  <!-- ── AUTH OVERLAY ── -->
+  <!-- AUTH OVERLAY -->
   <div id="auth-overlay">
-    <div class="auth-title">🔐 АВТОРИЗАЦИЯ В ГОВНО-СИСТЕМЕ</div>
+    <div class="auth-title">🔐 АВТОРИЗАЦИЯ</div>
     <div class="auth-sub">
-      Укажи URL сервера и токен доступа.<br>
-      Неверный токен = <strong style="color:#f0c060">💨 ПУУК</strong> и дисконнект.
+      Неверный токен = <strong style="color:#f0c060">💨 ПУУК</strong> + дисконнект.
+      Автореконнект с exponential backoff.
     </div>
-
-    <div class="input-group">
-      <label>WebSocket URL сервера</label>
-      <input class="field" id="url-input" type="text" placeholder="ws://localhost:3000/ws" />
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div class="input-group">
+        <label>WS URL</label>
+        <input class="field" id="url-input" type="text" placeholder="ws://localhost:3000/ws"/>
+      </div>
+      <div class="input-group">
+        <label>Токен (GOVNO_TOKEN)</label>
+        <input class="field" id="token-input" type="password" placeholder="говно"/>
+      </div>
     </div>
-
-    <div class="input-group">
-      <label>Токен (GOVNO_TOKEN, default: говно)</label>
-      <input class="field" id="token-input" type="password" placeholder="говно" />
-    </div>
-
-    <button class="btn btn-amber" id="btn-auth" style="width:100%;padding:10px">
-      🚀 Войти в говно
+    <button class="btn btn-am" id="btn-auth" style="width:100%;padding:10px">
+      🚀 Войти в говно-систему
     </button>
-
-    <details class="docker-hint">
-      <summary>🐳 Как запустить сервер?</summary>
-      <br>
-      <strong>Docker (рекомендуется):</strong><br>
-      <code>docker compose up</code><br><br>
-      <strong>Вручную:</strong><br>
-      <code>GOVNO_TOKEN=говно cargo run -p govno-server</code><br><br>
-      <strong>На GitHub Pages:</strong> браузер не позволит ws:// с https://<br>
-      Запусти сервер локально и введи <code>ws://localhost:3000/ws</code>.<br>
-      (Chrome разрешает ws://localhost с HTTPS-страниц.)
+    <details class="hint">
+      <summary>🐳 Как запустить стек?</summary><br>
+      <code>docker compose up</code> — поднимает оркестратор + все 4 воркера + nginx<br>
+      <code>docker compose run --rm wasm-builder</code> — только если нужно пересобрать WASM<br><br>
+      Вручную: <code>GOVNO_TOKEN=говно cargo run -p govno-orchestrator</code><br>
+      На GitHub Pages: введи URL своего сервера (Chrome разрешает ws:// с https://).
     </details>
   </div>
 
-  <!-- ── MAIN UI (скрыт до авторизации) ── -->
+  <!-- MAIN UI -->
   <div id="main-ui">
 
-    <!-- топики -->
-    <div class="row">
-      <label>топик:</label>
-      <button id="btn-liquid"   class="btn btn-liquid"   disabled>💧 жидкое</button>
-      <button id="btn-solid"    class="btn btn-solid"    disabled>🧱 твёрдое</button>
-      <button id="btn-gas"      class="btn btn-gas"      disabled>💨 газ</button>
-      <button id="btn-critical" class="btn btn-critical" disabled>🚨 критик</button>
-      <button id="btn-unsub"    class="btn btn-unsub"    disabled>✕ отписаться</button>
-      <span id="sub-label">не подписан</span>
+    <!-- Topic buttons + global controls -->
+    <div class="row" style="flex-wrap:wrap">
+      <label>топики:</label>
+      <button id="btn-topic-liquid"   class="btn btn-liquid"   onclick="toggle_topic('liquid')"   disabled>💧 жидкое</button>
+      <button id="btn-topic-solid"    class="btn btn-solid"    onclick="toggle_topic('solid')"    disabled>🧱 твёрдое</button>
+      <button id="btn-topic-gas"      class="btn btn-gas"      onclick="toggle_topic('gas')"      disabled>💨 газ</button>
+      <button id="btn-topic-critical" class="btn btn-critical" onclick="toggle_topic('critical')" disabled>🚨 критик</button>
+      <button id="btn-sub-all"        class="btn btn-dim"      onclick="subscribe_all()"          disabled>★ все</button>
+      <button id="btn-unsub-all"      class="btn btn-dim"      onclick="unsubscribe_all()"        disabled>✕</button>
     </div>
 
-    <!-- лог -->
+    <!-- Toolbar -->
+    <div class="row">
+      <button id="btn-ping"  class="btn btn-dim" onclick="ping()"       disabled>ping</button>
+      <button class="btn btn-dim" onclick="clear_log()">очистить</button>
+      <button class="btn btn-dim" onclick="export_log()">⬇ экспорт</button>
+      <button id="btn-sound" class="btn btn-dim" onclick="handleSoundToggle()">🔕 звук</button>
+      <div class="filter-bar" style="flex:1">
+        <input class="field" id="filter-input" type="text"
+               placeholder="фильтр..."
+               oninput="set_log_filter(this.value)" style="font-size:.73rem;padding:4px 8px"/>
+      </div>
+    </div>
+
+    <!-- Log -->
     <div id="log">
       <p class="msg-system">— ожидаем авторизации... —</p>
     </div>
 
-    <!-- echo -->
+    <!-- Echo -->
     <div class="row nb">
-      <input class="field" id="msg-input" type="text" placeholder="Эхо: напиши что-нибудь..." disabled style="flex:1;padding:7px 10px" />
-      <button id="btn-send" class="btn btn-amber" disabled>ЭХО 💩</button>
+      <input class="field" id="msg-input" type="text"
+             placeholder="Эхо: напиши что-нибудь..."
+             disabled style="flex:1;padding:6px 9px"/>
+      <button id="btn-send" class="btn btn-am" disabled>ЭХО 💩</button>
     </div>
 
-    <!-- session -->
-    <div class="session-row">session: <code id="session-id">—</code></div>
+    <!-- Sparklines -->
+    <div class="spark-grid">
+      <div class="spark-box">
+        <canvas id="canvas-liquid"   width="120" height="36"></canvas>
+        <div class="spark-label">💧 <span id="rate-liquid">0/s</span></div>
+      </div>
+      <div class="spark-box">
+        <canvas id="canvas-solid"    width="120" height="36"></canvas>
+        <div class="spark-label">🧱 <span id="rate-solid">0/s</span></div>
+      </div>
+      <div class="spark-box">
+        <canvas id="canvas-gas"      width="120" height="36"></canvas>
+        <div class="spark-label">💨 <span id="rate-gas">0/s</span></div>
+      </div>
+      <div class="spark-box">
+        <canvas id="canvas-critical" width="120" height="36"></canvas>
+        <div class="spark-label">🚨 <span id="rate-critical">0/s</span></div>
+      </div>
+      <div class="spark-box">
+        <canvas id="canvas-total"    width="120" height="36"></canvas>
+        <div class="spark-label">∑ <span id="rate-total">0/s</span></div>
+      </div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="rate-row">
+      <span>всего: <span id="stat-total">0</span></span>
+      <span>uptime: <span id="stat-uptime">00:00:00</span></span>
+    </div>
+
+    <!-- Services registry -->
+    <div class="services-section">
+      <div class="section-title">🎭 ПОДКЛЮЧЁННЫЕ ВОРКЕРЫ</div>
+      <div id="services-panel"><p class="msg-system">— нет данных —</p></div>
+    </div>
+
   </div>
 
-  <!-- метрики -->
+  <!-- Metrics -->
   <div class="metrics-panel">
-    <div class="metrics-head">
+    <div style="font-size:.72rem;color:var(--am);font-weight:700;margin-bottom:6px;display:flex;justify-content:space-between">
       <span>📊 ГОВНО-МЕТРИКИ</span>
-      <small id="metrics-ts">—</small>
+      <small id="metrics-ts" style="color:var(--mu);font-weight:400">—</small>
     </div>
     <div class="metrics-grid">
-      <div class="metric-box"><span class="metric-val" id="m-total">—</span><span class="metric-name">total</span></div>
-      <div class="metric-box"><span class="metric-val" id="m-assholes">—</span><span class="metric-name">assholes</span></div>
+      <div class="metric-box"><span class="metric-val" id="m-total">—</span><span class="metric-name">messages</span></div>
+      <div class="metric-box"><span class="metric-val" id="m-consumers">—</span><span class="metric-name">consumers</span></div>
+      <div class="metric-box"><span class="metric-val" id="m-producers">—</span><span class="metric-name">producers</span></div>
       <div class="metric-box"><span class="metric-val" id="m-auth-ok">—</span><span class="metric-name">auth ok</span></div>
       <div class="metric-box"><span class="metric-val" id="m-auth-fail">—</span><span class="metric-name">auth fail</span></div>
-      <div class="metric-box"><span class="metric-val" id="m-liquid">—</span><span class="metric-name">💧 жидкое</span></div>
-      <div class="metric-box"><span class="metric-val" id="m-solid">—</span><span class="metric-name">🧱 твёрдое</span></div>
-      <div class="metric-box"><span class="metric-val" id="m-gas">—</span><span class="metric-name">💨 газ</span></div>
-      <div class="metric-box"><span class="metric-val" id="m-critical">—</span><span class="metric-name">🚨 критик</span></div>
     </div>
+  </div>
+
+  <div class="session-row">
+    arch: <code>workers → /producer → orchestrator → broadcast → /ws → WASM</code>
   </div>
 
 </div>
 
 <footer>
-  клиент: <code>Rust → WebAssembly</code> (wasm-bindgen + web-sys) &nbsp;|&nbsp;
-  сервер: <code>Axum + Tokio</code> &nbsp;|&nbsp;
-  оркестрация: <code>mpsc (biased) → broadcast</code>
+  client: <code>Rust → WebAssembly</code> · server: <code>Axum + Tokio</code> ·
+  workers: <code>4 microservices, dynamic registry</code>
 </footer>
 
 <script type="module">
 import init, {
-  connect, auth, subscribe, unsubscribe, send_echo, ping, disconnect
+  connect, auth, toggle_topic, subscribe_all, unsubscribe_all,
+  send_echo, ping, disconnect, clear_log, export_log,
+  tick, set_log_filter, toggle_sound
 } from './pkg/govno_client.js';
+
+// Expose to onclick handlers in HTML
+Object.assign(window, {
+  toggle_topic, subscribe_all, unsubscribe_all,
+  send_echo, ping, clear_log, export_log, set_log_filter
+});
 
 await init();
 
-// Smart URL: на localhost — дефолт, иначе — пустое поле
+// Smart URL default
 const isLocal = ['localhost','127.0.0.1','0.0.0.0'].includes(location.hostname);
 const urlInput = document.getElementById('url-input');
 urlInput.value = isLocal ? 'ws://127.0.0.1:3000/ws' : '';
-if (!isLocal) urlInput.placeholder = 'ws://твой-сервер:3000/ws';
 
-// Auth button
+// Auth
 document.getElementById('btn-auth').onclick = async () => {
   const url   = urlInput.value.trim() || 'ws://127.0.0.1:3000/ws';
-  const token = document.getElementById('token-input').value || 'говно';
+  const token = document.getElementById('token-input').value.trim() || 'говно';
   document.getElementById('btn-auth').disabled = true;
-  try {
-    connect(url);
-    // Небольшая задержка — ждём WS open + auth_required от сервера
-    await new Promise(r => setTimeout(r, 600));
-    auth(token);
-  } catch(e) {
-    document.getElementById('btn-auth').disabled = false;
-  }
+  connect(url);
+  await new Promise(r => setTimeout(r, 600)); // wait for onopen + auth_required
+  auth(token);
+  // re-enable after 3s in case of failure
+  setTimeout(() => { document.getElementById('btn-auth').disabled = false; }, 3000);
 };
-
-// Enter в поле токена
 document.getElementById('token-input').onkeydown = e => {
   if (e.key === 'Enter') document.getElementById('btn-auth').click();
 };
 
-// Топики
-document.getElementById('btn-liquid'  ).onclick = () => subscribe('жидкое');
-document.getElementById('btn-solid'   ).onclick = () => subscribe('твёрдое');
-document.getElementById('btn-gas'     ).onclick = () => subscribe('газообразное');
-document.getElementById('btn-critical').onclick = () => subscribe('критическое');
-document.getElementById('btn-unsub'   ).onclick = () => unsubscribe();
-
-// Эхо
+// Echo
 document.getElementById('btn-send').onclick = () => {
   const inp = document.getElementById('msg-input');
   send_echo(inp.value); inp.value = ''; inp.focus();
@@ -283,31 +331,42 @@ document.getElementById('msg-input').onkeydown = e => {
   if (e.key === 'Enter') document.getElementById('btn-send').click();
 };
 
-// Метрики
-const metricsUrl = () => {
-  const wsUrl = urlInput.value.trim() || 'ws://127.0.0.1:3000/ws';
-  return wsUrl.replace(/^ws/, 'http').replace('/ws', '') + '/metrics/json';
+// Sound toggle button UI
+window.handleSoundToggle = () => {
+  const on = toggle_sound();
+  document.getElementById('btn-sound').textContent = on ? '🔔 звук' : '🔕 звук';
 };
-async function updateMetrics() {
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === '/' ) document.getElementById('filter-input').focus();
+  if (e.key === 'a' ) subscribe_all();
+  if (e.key === 'x' ) unsubscribe_all();
+  if (e.key === 'c' ) clear_log();
+  if (e.key === 'p' ) ping();
+});
+
+// Metrics auto-refresh
+const metricsUrl = () =>
+  (urlInput.value.trim() || 'ws://127.0.0.1:3000/ws')
+    .replace(/^ws/, 'http').replace('/ws', '') + '/metrics/json';
+
+async function refreshMetrics() {
   try {
-    const r = await fetch(metricsUrl());
-    const d = await r.json();
-    document.getElementById('m-total'    ).textContent = d.shit_messages_total;
-    document.getElementById('m-assholes' ).textContent = d.connected_assholes;
-    document.getElementById('m-auth-ok'  ).textContent = d.shit_auth_success;
-    document.getElementById('m-auth-fail').textContent = d.shit_auth_failures;
-    document.getElementById('m-liquid'   ).textContent = d.shit_liquid_total;
-    document.getElementById('m-solid'    ).textContent = d.shit_solid_total;
-    document.getElementById('m-gas'      ).textContent = d.shit_gas_total;
-    document.getElementById('m-critical' ).textContent = d.shit_critical_total;
+    const d = await (await fetch(metricsUrl())).json();
+    document.getElementById('m-total'    ).textContent = d.shit_messages_total ?? '—';
+    document.getElementById('m-consumers').textContent = d.connected_consumers ?? '—';
+    document.getElementById('m-producers').textContent = d.connected_producers ?? '—';
+    document.getElementById('m-auth-ok'  ).textContent = d.shit_auth_success   ?? '—';
+    document.getElementById('m-auth-fail').textContent = d.shit_auth_failures  ?? '—';
     const n = new Date();
     document.getElementById('metrics-ts').textContent =
       `${n.getHours().toString().padStart(2,'0')}:${n.getMinutes().toString().padStart(2,'0')}:${n.getSeconds().toString().padStart(2,'0')}`;
-  } catch { /* сервер недоступен */ }
+  } catch { /* server offline */ }
 }
-updateMetrics();
-setInterval(updateMetrics, 3000);
+refreshMetrics();
+setInterval(refreshMetrics, 3000);
 </script>
-
 </body>
 </html>

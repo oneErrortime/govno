@@ -1,40 +1,105 @@
-# 💩 ГОВНО-СТЕК
+# 💩 ГОВНО-СТЕК v0.3.0
 #
-# Запуск полного стека:
-#   docker compose up
+#  Запуск полного стека:
+#    docker compose up --build
 #
-# Сначала собрать WASM (один раз или после изменений клиента):
-#   docker compose run --rm wasm-builder
+#  Добавить новую какашку (e.g. "plasma"):
+#    1. Создай workers/plasma/ по образцу workers/liquid/
+#    2. Добавь сервис plasma-worker ниже по образцу liquid-worker
+#    3. docker compose up --build plasma-worker
+#    Оркестратор подхватит новый воркер автоматически — перезапуск не нужен.
 #
-# Переменные:
-#   GOVNO_TOKEN — токен авторизации (default: говно)
-#   SERVER_PORT — порт сервера (default: 3000)
-#   CLIENT_PORT — порт статики (default: 8080)
+#  Пересобрать WASM клиент:
+#    docker compose run --rm wasm-builder
+#
+#  Переменные окружения:
+#    GOVNO_TOKEN  — токен авторизации (default: говно)
+
+x-worker-base: &worker-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment:
+    ORCHESTRATOR_URL: "ws://orchestrator:3000/producer"
+    RUST_LOG: "info"
+  depends_on:
+    orchestrator:
+      condition: service_healthy
+  restart: unless-stopped
+  # Workers don't expose ports — they speak only to the orchestrator
+  healthcheck:
+    disable: true
 
 services:
 
-  # ── Говно-сервер ──────────────────────────────────────────────────────────
-  server:
+  # ── Оркестратор ─────────────────────────────────────────────────────────────
+  orchestrator:
     build:
       context: .
       dockerfile: Dockerfile
-      target: runtime
-    image: govno-server:latest
-    container_name: govno-server
+      args:
+        TARGET: govno-orchestrator
+    image: govno/orchestrator:latest
+    container_name: govno-orchestrator
     ports:
       - "${SERVER_PORT:-3000}:3000"
     environment:
       GOVNO_TOKEN: "${GOVNO_TOKEN:-говно}"
-      RUST_LOG: govno_server=info
+      RUST_LOG: "govno_orchestrator=debug,tower_http=info"
+      LISTEN_ADDR: "0.0.0.0:3000"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
-      interval: 10s
+      interval: 8s
       timeout: 3s
-      retries: 3
+      retries: 5
       start_period: 5s
     restart: unless-stopped
 
-  # ── Статика (nginx отдаёт www/ с WASM-клиентом) ──────────────────────────
+  # ── Воркеры ─────────────────────────────────────────────────────────────────
+  # Каждый воркер — отдельный контейнер/сервис.
+  # Добавить новый — скопировать секцию и поменять TARGET + имена.
+
+  liquid-worker:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGET: govno-worker-liquid
+    image: govno/worker-liquid:latest
+    container_name: govno-worker-liquid
+
+  solid-worker:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGET: govno-worker-solid
+    image: govno/worker-solid:latest
+    container_name: govno-worker-solid
+
+  gas-worker:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGET: govno-worker-gas
+    image: govno/worker-gas:latest
+    container_name: govno-worker-gas
+
+  critical-worker:
+    <<: *worker-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGET: govno-worker-critical
+    image: govno/worker-critical:latest
+    container_name: govno-worker-critical
+
+  # ── Nginx → статика с WASM клиентом ─────────────────────────────────────────
   client:
     image: nginx:alpine
     container_name: govno-client
@@ -44,28 +109,42 @@ services:
       - ./www:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      server:
+      orchestrator:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── WASM Builder (запускается вручную: docker compose run --rm wasm-builder) ──
+  # ── WASM builder (запускается вручную) ───────────────────────────────────────
   wasm-builder:
     image: rust:1.77-slim
     container_name: govno-wasm-builder
     working_dir: /app
     volumes:
       - .:/app
-      - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/app/target
+      - wasm-cargo-cache:/usr/local/cargo/registry
+      - wasm-target-cache:/app/target
+    environment:
+      CARGO_TARGET_DIR: /app/target
     command: >
       bash -c "
-        apt-get update -q && apt-get install -y -q curl &&
-        curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh &&
-        wasm-pack build client --target web --out-dir ../www/pkg --release
+        set -ex
+        echo '=== Installing system deps ==='
+        apt-get update -q
+        apt-get install -y -q --no-install-recommends curl ca-certificates
+        echo '=== Installing wasm-pack ==='
+        curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        echo '=== Adding wasm32 target ==='
+        rustup target add wasm32-unknown-unknown
+        echo '=== Building WASM client ==='
+        wasm-pack build client \
+          --target web \
+          --out-dir ../www/pkg \
+          --release
+        echo '=== Build complete. Files in www/pkg: ==='
+        ls -lh www/pkg/
       "
     profiles:
       - build
 
 volumes:
-  cargo-cache:
-  target-cache:
+  wasm-cargo-cache:
+  wasm-target-cache:
