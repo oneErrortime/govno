@@ -127,7 +127,8 @@ jobs:
           pkg_name=$(grep -m1 '^name' workers/common/Cargo.toml | sed 's/.*= *"\(.*\)"/\1/')
           echo "  package name: '$pkg_name'"
           for w in liquid solid gas critical; do
-            ref_name=$(grep 'workers' workers/$w/Cargo.toml | grep -oP '"[^"]+"' | head -1 | tr -d '"')
+            # Extract dep key: token before '=' e.g. 'workers-common = {...}' -> 'workers-common'
+            ref_name=$(grep '^workers' workers/$w/Cargo.toml | grep -oP '^[^=[:space:]]+' | head -1)
             if [ "$ref_name" = "$pkg_name" ]; then
               echo "  ✅ workers/$w references '$ref_name' (matches)"
             else
@@ -586,12 +587,13 @@ jobs:
           for f in lib.rs protocol.rs state.rs dom.rs canvas.rs audio.rs ws.rs; do
             path="client/src/$f"
             if [ -f "$path" ]; then
-              lines=$(wc -l < "$path")
-              bytes=$(wc -c < "$path")
+              lines=$(wc -l < "$path" | tr -d " ")
+              bytes=$(wc -c < "$path" | tr -d " ")
               # Extract wasm_bindgen exports
-              exports=$(grep -c '#\[wasm_bindgen' "$path" || echo 0)
-              printf "  ✅ %-20s %3d lines  %5d bytes  %d wasm_bindgen items\n" \
-                "$f" "$lines" "$bytes" "$exports"
+              # grep -c returns exit 1 on 0 matches; || true prevents set -e abort
+              exports=$(grep -c '#\[wasm_bindgen' "$path" 2>/dev/null || true)
+              exports=${exports:-0}
+              echo "  ✅ ${f}  ${lines} lines  ${bytes} bytes  ${exports} wasm_bindgen items"
             else
               echo "  ❌ MISSING: $path"
               MISSING=1

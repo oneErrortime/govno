@@ -90,7 +90,24 @@ RUN set -ex \
 # Copy real sources on top of stubs. Touch them so cargo detects the change.
 FROM deps AS builder
 
+# ENV is NOT guaranteed to propagate across multi-stage FROM in all Docker
+# versions/drivers. Re-export explicitly so cargo/rustc are on PATH.
+# (rust:1.77-slim sets these in its own Dockerfile, but intermediate stages
+# may not inherit ENV — explicit is safer and documents the dependency.)
+ENV PATH="/usr/local/cargo/bin:${PATH}"
+ENV CARGO_HOME="/usr/local/cargo"
+ENV RUSTUP_HOME="/usr/local/rustup"
+
 ARG TARGET=govno-orchestrator
+
+# Verify cargo is reachable before doing anything else in this stage.
+# Exit immediately (with path info) if not found.
+RUN set -ex \
+    && echo "=== builder stage: verifying cargo ===" \
+    && which cargo   || { echo "❌ cargo not in PATH=$PATH"; exit 127; } \
+    && cargo --version \
+    && rustc --version \
+    && echo "=== cargo OK ==="
 
 COPY proto/src               proto/src
 COPY orchestrator/src        orchestrator/src
