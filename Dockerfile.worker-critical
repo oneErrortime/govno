@@ -33,7 +33,7 @@ USER govno
 EXPOSE 3000
 ENV RUST_LOG=info
 ENV GOVNO_TOKEN=govnotoken
-ENV ORCHESTRATOR_URL=wss://govno-orchestrator.onrender.com/producer
+ENV ORCHESTRATOR_URL=wss://govno-orchestrator-z8a5.onrender.com/producer
 ENV LISTEN_ADDR=0.0.0.0:3000
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO- http://localhost:3000/health || exit 1
 CMD ["/usr/local/bin/app"]
